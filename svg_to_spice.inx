@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<inkscape-extension xmlns="http://www.inkscape.org/namespace/inkscape/extension">
+
+  <name>SVG to SPICE Netlist</name>
+  <id>com.yourname.svg_to_spice</id>
+
+  <param name="out" type="string" gui-text="Netlist Output File">netlist.cir</param>
+  <param name="wire_out" type="string" gui-text="Wirelist Output File">wirelist.csv</param>
+
+  <param name="tol" type="float" gui-text="Tolerance">0.5</param>
+
+  <param name="resistance" type="string" gui-text="Default Resistance">1k</param>
+  <param name="inductance" type="string" gui-text="Default Inductance">1m</param>
+  <param name="capacitance" type="string" gui-text="Default Capacitance">1u</param>
+  <param name="diode_model" type="string" gui-text="Diode Model">Ddefault</param>
+
+  <effect>
+    <object-type>all</object-type>
+    <effects-menu>
+      <submenu name="Electrical"/>
+    </effects-menu>
+  </effect>
+
+  <script>
+    <command location="inx" interpreter="python">svg_to_spice.py</command>
+  </script>
+
+</inkscape-extension>
