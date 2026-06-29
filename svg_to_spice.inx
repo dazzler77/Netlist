@@ -7,6 +7,9 @@
   <param name="out" type="string" gui-text="Netlist Output File">netlist.cir</param>
   <param name="wire_out" type="string" gui-text="Wirelist Output File">wirelist.csv</param>
 
+  <param name="layers" type="string" gui-text="Layers (comma-separated)">
+  </param>
+
   <param name="tol" type="float" gui-text="Tolerance">0.5</param>
 
   <param name="resistance" type="string" gui-text="Default Resistance">1k</param>
