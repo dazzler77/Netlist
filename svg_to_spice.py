@@ -116,7 +116,35 @@ def descendants(el: ET.Element) -> Iterable[ET.Element]:
         yield child
         yield from descendants(child)
 
+def is_layer(el: ET.Element) -> bool:
+    return (
+        local_name(el.tag) == "g"
+        and el.attrib.get("{http://www.inkscape.org/namespaces/inkscape}groupmode") == "layer"
+    )
 
+
+def layer_name(el: ET.Element) -> str:
+    return inkscape_label(el) or el.attrib.get("id", "")
+
+
+def element_in_selected_layers(
+    el: ET.Element,
+    parent_map: Dict[ET.Element, ET.Element],
+    selected_layers: Set[str],
+) -> bool:
+    """
+    Walks up the tree to find the containing Inkscape layer.
+    """
+    cur = el
+
+    while cur is not None:
+        if is_layer(cur):
+            name = layer_name(cur)
+            return name in selected_layers
+        cur = parent_map.get(cur)
+
+    # No layer = include (safe fallback)
+    return True
 # ---------------------------------------------------------------------
 # Transform handling
 # ---------------------------------------------------------------------
@@ -608,15 +636,32 @@ def element_endpoints(
 # SVG collection
 # ---------------------------------------------------------------------
 
-def collect_svg(svg_path: Path) -> Tuple[List[Wire], List[Component]]:
+def collect_svg(
+    svg_path: Path,
+    include_layers: Optional[Set[str]] = None,
+) -> Tuple[List[Wire], List[Component]]:
+
     tree = ET.parse(svg_path)
     root = tree.getroot()
     parent = build_parent_map(root)
 
+    selected_layers = include_layers if include_layers else None
+
     component_groups: List[Tuple[ET.Element, str]] = []
     element_to_component_group: Dict[ET.Element, ET.Element] = {}
 
+    # -------------------------------------------------------------
+    # COMPONENT COLLECTION (layer filtered)
+    # -------------------------------------------------------------
     for el in root.iter():
+        # LAYER FILTER
+        if selected_layers and not element_in_selected_layers(
+            el,
+            parent,
+            selected_layers,
+        ):
+            continue
+
         ctype = group_component_type(el)
 
         if ctype is None:
@@ -672,10 +717,21 @@ def collect_svg(svg_path: Path) -> Tuple[List[Wire], List[Component]]:
 
     wires: List[Wire] = []
 
+    # -------------------------------------------------------------
+    # WIRE COLLECTION (layer filtered)
+    # -------------------------------------------------------------
     for el in root.iter():
         tag = local_name(el.tag)
 
         if tag not in {"path", "line"}:
+            continue
+
+        # LAYER FILTER
+        if selected_layers and not element_in_selected_layers(
+            el,
+            parent,
+            selected_layers,
+        ):
             continue
 
         # Anything inside a component group is part of the component,
@@ -712,7 +768,6 @@ def collect_svg(svg_path: Path) -> Tuple[List[Wire], List[Component]]:
         )
 
     return wires, components
-
 
 # ---------------------------------------------------------------------
 # Net solving
@@ -1097,9 +1152,24 @@ def main() -> int:
         help="Default diode model name",
     )
 
+    
+    ap.add_argument(
+        "--layers",
+        type=str,
+        default="",
+        help="Comma-separated list of Inkscape layer names to include (empty = all layers)",
+    )
+
+
     args = ap.parse_args()
 
-    wires, components = collect_svg(args.svg)
+    layer_set = {s.strip() for s in args.layers.split(",") if s.strip()}
+
+    wires, components = collect_svg(
+        args.svg,
+        include_layers=layer_set if layer_set else None,
+    )
+
 
     defaults = {
         "resistance": args.resistance,
@@ -1154,6 +1224,7 @@ class SvgToSpice(inkex.EffectExtension):
         pars.add_argument("--inductance", type=str, default="1m")
         pars.add_argument("--capacitance", type=str, default="1u")
         pars.add_argument("--diode_model", type=str, default="Ddefault")
+        pars.add_argument("--layers", type=str, default="")
 
     def effect(self):
         import tempfile
