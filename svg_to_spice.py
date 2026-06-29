@@ -1240,7 +1240,12 @@ class SvgToSpice(inkex.EffectExtension):
         try:
             tree.write(tmp_svg)
 
-            wires, components = collect_svg(tmp_svg)
+            layer_set = {s.strip() for s in self.options.layers.split(",") if s.strip()}
+
+            wires, components = collect_svg(
+                tmp_svg,
+                include_layers=layer_set if layer_set else None,
+            )
 
             defaults = {
                 "resistance": self.options.resistance,
