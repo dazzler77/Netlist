@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<inkscape-extension xmlns="http://www.inkscape.org/namespace/inkscape/extension">
+  <name>Import Falstad Circuit Text v3</name>
+  <id>com.downer.falstad_importer.v3</id>
+  <param name="falstad_text" type="string" appearance="multiline" gui-text="Paste Falstad/CircuitJS text"><![CDATA[<cir f="1" ts="0.000015625" ic="89.03963197220334" cb="50" pb="46" vr="5" mts="5e-11">
+  <w x="592 272 592 336" f="0"/>
+  <w x="592 416 592 464" f="0"/>
+  <w x="544 416 592 416" f="0"/>
+  <w x="592 416 640 416" f="0"/>
+  <w x="544 336 592 336" f="0"/>
+  <w x="592 336 640 336" f="0"/>
+  <l x="544 336 544 416" f="0" l="0.0005995841272856994" ic="0" i="-0.000719508825981614"/>
+  <c x="640 336 640 416" f="0" c="0.00016898576701991088" iv="0.001" sr="0" vd="-0.008524696664946414"/>
+  <r x="480 272 592 272" f="0" r="200"/>
+  <g x="592 464 592 480" f="0"/>
+  <R x="480 272 432 272" f="0" wf="6" fr="40" maxv="5"/>
+  <aout x="592 272 688 272" f="0" du="1" sa="8000" la="1"/>
+</cir>]]></param>
+  <param name="scale" type="float" min="0.01" max="20" precision="3" gui-text="Scale">1.0</param>
+  <param name="auto_origin" type="bool" gui-text="Auto place using minimum Falstad coordinate">true</param>
+  <param name="margin" type="float" precision="1" gui-text="Auto placement margin">20</param>
+  <param name="x_offset" type="float" precision="1" gui-text="Manual X offset, can be negative">0</param>
+  <param name="y_offset" type="float" precision="1" gui-text="Manual Y offset, can be negative">0</param>
+  <param name="stroke_width" type="float" min="0.1" max="20" precision="2" gui-text="Stroke width">2.0</param>
+  <param name="show_labels" type="bool" gui-text="Show component labels">true</param>
+  <param name="fallback_symbols" type="bool" gui-text="Draw unsupported elements as generic boxes">true</param>
+  <param name="layer_name" type="string" gui-text="Layer name">Falstad import</param>
+  <effect>
+    <object-type>all</object-type>
+    <effects-menu>
+      <submenu name="Electrical"/>
+    </effects-menu>
+  </effect>
+  <script>
+    <command location="inx" interpreter="python">falstad_importer.py</command>
+  </script>
+</inkscape-extension>
