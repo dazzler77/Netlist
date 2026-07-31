@@ -254,39 +254,107 @@ def draw_generic(parent, x1, y1, x2, y2, style):
     mx, my = pt(x1, y1, ux, uy, px, py, L / 2, 0)
     add_rect(parent, mx - 24, my - 12, 48, 24, style)
 
+def draw_component(
+    parent,
+    elem,
+    style,
+    text_style,
+    show_labels=True,
+    fallback=True
+):
+    """
+    Draw one CircuitJS element.
 
-def draw_component(parent, elem, style, text_style, show_labels=True, fallback=True):
+    Returns:
+        "drawn"   - a recognised symbol was drawn
+        "generic" - an unsupported symbol was drawn as a rectangle
+        "skipped" - the element could not be drawn
+    """
+
     p = points_from_x_attr(elem)
+
     if p is None:
-        return False
+        return "skipped"
+
     x1, y1, x2, y2 = p
     tag = elem.tag
+
     if tag == "w":
         add_line(parent, x1, y1, x2, y2, style)
+        result = "drawn"
+
     elif tag == "r":
         draw_resistor(parent, x1, y1, x2, y2, style)
+        result = "drawn"
+
     elif tag == "c":
         draw_capacitor(parent, x1, y1, x2, y2, style)
+        result = "drawn"
+
     elif tag == "l":
         draw_inductor(parent, x1, y1, x2, y2, style)
+        result = "drawn"
+
     elif tag == "g":
         draw_ground(parent, x1, y1, x2, y2, style)
+        result = "drawn"
+
     elif tag in ("R", "v", "i"):
-        draw_source(parent, x1, y1, x2, y2, style, text_style)
+        draw_source(
+            parent,
+            x1,
+            y1,
+            x2,
+            y2,
+            style,
+            text_style
+        )
+        result = "drawn"
+
     elif tag in ("d", "D", "z"):
         draw_diode(parent, x1, y1, x2, y2, style)
+        result = "drawn"
+
     elif tag in ("s", "S"):
         draw_switch(parent, x1, y1, x2, y2, style)
+        result = "drawn"
+
     elif fallback:
         draw_generic(parent, x1, y1, x2, y2, style)
+        result = "generic"
+
     else:
-        return False
+        return "skipped"
 
     if show_labels and tag != "w":
-        L, ux, uy, px, py = unit_geometry(x1, y1, x2, y2)
-        mx, my = pt(x1, y1, ux, uy, px, py, L / 2, -18)
-        add_text(parent, label_for(elem), mx, my, 10, text_style)
-    return True
+        L, ux, uy, px, py = unit_geometry(
+            x1,
+            y1,
+            x2,
+            y2
+        )
+
+        mx, my = pt(
+            x1,
+            y1,
+            ux,
+            uy,
+            px,
+            py,
+            L / 2,
+            -18
+        )
+
+        add_text(
+            parent,
+            label_for(elem),
+            mx,
+            my,
+            10,
+            text_style
+        )
+
+    return result
 
 
 class FalstadImporter(inkex.EffectExtension):
@@ -303,72 +371,312 @@ class FalstadImporter(inkex.EffectExtension):
         pars.add_argument("--layer_name", default="Falstad import")
 
     def effect(self):
-        root, original = parse_circuit(self.options.falstad_text)
+        root, original = parse_circuit(
+            self.options.falstad_text
+        )
+
         bounds = circuit_bounds(root)
+
         if bounds is None:
-            raise inkex.AbortExtension("Parsed the circuit, but no drawable x=\"x1 y1 x2 y2\" coordinates were found.")
+            raise inkex.AbortExtension(
+                'Parsed the circuit, but no drawable '
+                'x="x1 y1 x2 y2" coordinates were found.'
+            )
+
         min_x, min_y, max_x, max_y = bounds
 
-        scale = max(0.01, float(self.options.scale))
-        manual_x = float(self.options.x_offset)
-        manual_y = float(self.options.y_offset)
-        margin = float(self.options.margin)
+        scale = max(
+            0.01,
+            float(self.options.scale)
+        )
+
+        manual_x = float(
+            self.options.x_offset
+        )
+
+        manual_y = float(
+            self.options.y_offset
+        )
+
+        margin = float(
+            self.options.margin
+        )
 
         if bool(self.options.auto_origin):
-            # Move the minimum Falstad coordinate to the drawing margin, then apply manual offsets.
-            # Example: if min_x=432 and min_y=272 and margin=20, translate=(-412,-252).
             ox = margin - min_x + manual_x
             oy = margin - min_y + manual_y
         else:
-            # Manual mode. Negative offsets are allowed because .inx does not clamp these fields.
             ox = manual_x
             oy = manual_y
 
         style = inkex.Style({
-            "stroke": "#000000", "stroke-width": str(self.options.stroke_width),
-            "fill": "none", "stroke-linecap": "round", "stroke-linejoin": "round",
+            "stroke": "#000000",
+            "stroke-width": str(
+                self.options.stroke_width
+            ),
+            "fill": "none",
+            "stroke-linecap": "round",
+            "stroke-linejoin": "round",
         })
+
         text_style = inkex.Style({
-            "font-family": "Arial, Helvetica, sans-serif", "font-size": "10px",
-            "fill": "#000000", "stroke": "none",
+            "font-family": (
+                "Arial, Helvetica, sans-serif"
+            ),
+            "font-size": "10px",
+            "fill": "#000000",
+            "stroke": "none",
         })
 
         layer = Group()
-        layer.set(inkex.addNS("groupmode", "inkscape"), "layer")
-        layer.set(inkex.addNS("label", "inkscape"), self.options.layer_name or "Falstad import")
-        layer.set("transform", f"translate({ox:.6g},{oy:.6g}) scale({scale:.6g})")
-        layer.set("data-falstad-min-x", str(min_x))
-        layer.set("data-falstad-min-y", str(min_y))
-        layer.set("data-falstad-max-x", str(max_x))
-        layer.set("data-falstad-max-y", str(max_y))
-        layer.set("data-falstad-translate-x", str(ox))
-        layer.set("data-falstad-translate-y", str(oy))
-        self.svg.get_current_layer().append(layer)
+
+        layer.set(
+            inkex.addNS(
+                "groupmode",
+                "inkscape"
+            ),
+            "layer"
+        )
+
+        layer.set(
+            inkex.addNS(
+                "label",
+                "inkscape"
+            ),
+            self.options.layer_name
+            or "Falstad import"
+        )
+
+        # This preserves the existing scale and placement behaviour.
+        layer.set(
+            "transform",
+            (
+                f"translate({ox:.6g},{oy:.6g}) "
+                f"scale({scale:.6g})"
+            )
+        )
+
+        layer.set(
+            "data-falstad-min-x",
+            str(min_x)
+        )
+
+        layer.set(
+            "data-falstad-min-y",
+            str(min_y)
+        )
+
+        layer.set(
+            "data-falstad-max-x",
+            str(max_x)
+        )
+
+        layer.set(
+            "data-falstad-max-y",
+            str(max_y)
+        )
+
+        layer.set(
+            "data-falstad-translate-x",
+            str(ox)
+        )
+
+        layer.set(
+            "data-falstad-translate-y",
+            str(oy)
+        )
+
+        self.svg.get_current_layer().append(
+            layer
+        )
 
         desc = etree.Element("desc")
+
         desc.text = (
-            "Imported from Falstad/CircuitJS text on " + datetime.now().isoformat(timespec="seconds") + "\n"
-            + f"Falstad bounds: min=({min_x},{min_y}) max=({max_x},{max_y}) translate=({ox},{oy}) scale={scale}\n"
+            "Imported from Falstad/CircuitJS text on "
+            + datetime.now().isoformat(
+                timespec="seconds"
+            )
+            + "\n"
+            + (
+                "Falstad bounds: "
+                f"min=({min_x},{min_y}) "
+                f"max=({max_x},{max_y}) "
+                f"translate=({ox},{oy}) "
+                f"scale={scale}\n"
+            )
             + original
         )
+
         layer.append(desc)
 
         drawn = 0
+        generic = 0
+        skipped = 0
+
+        tag_counts = {}
+        drawn_tag_counts = {}
+        generic_tag_counts = {}
+        skipped_tag_counts = {}
+
+        skipped_details = []
+
         for elem in list(root):
-            if elem.tag.lower() == "o" or points_from_x_attr(elem) is None:
+            tag = elem.tag
+
+            tag_counts[tag] = (
+                tag_counts.get(tag, 0) + 1
+            )
+
+            # Lowercase <o> is a CircuitJS scope record.
+            # Do not use tag.lower(), because CircuitJS
+            # element tags can be case-sensitive.
+            if tag == "o":
                 continue
+
+            coordinates = points_from_x_attr(
+                elem
+            )
+
+            if coordinates is None:
+                skipped += 1
+
+                skipped_tag_counts[tag] = (
+                    skipped_tag_counts.get(
+                        tag,
+                        0
+                    )
+                    + 1
+                )
+
+                skipped_details.append(
+                    f"<{tag}> "
+                    f"attributes={dict(elem.attrib)}"
+                )
+
+                continue
+
             g = Group()
-            g.set("id", self.svg.get_unique_id("falstad_" + re.sub(r"[^A-Za-z0-9_-]", "_", elem.tag)))
-            g.set("data-falstad-tag", elem.tag)
-            for k, v in elem.attrib.items():
-                g.set("data-falstad-" + re.sub(r"[^A-Za-z0-9_-]", "_", k), str(v))
+
+            safe_tag = re.sub(
+                r"[^A-Za-z0-9_-]",
+                "_",
+                tag
+            )
+
+            g.set(
+                "id",
+                self.svg.get_unique_id(
+                    "falstad_" + safe_tag
+                )
+            )
+
+            g.set(
+                "data-falstad-tag",
+                tag
+            )
+
+            for key, value in elem.attrib.items():
+                safe_key = re.sub(
+                    r"[^A-Za-z0-9_-]",
+                    "_",
+                    key
+                )
+
+                g.set(
+                    "data-falstad-" + safe_key,
+                    str(value)
+                )
+
             layer.append(g)
-            if draw_component(g, elem, style, text_style, bool(self.options.show_labels), bool(self.options.fallback_symbols)):
+
+            result = draw_component(
+                g,
+                elem,
+                style,
+                text_style,
+                bool(
+                    self.options.show_labels
+                ),
+                bool(
+                    self.options.fallback_symbols
+                ),
+            )
+
+            if result == "drawn":
                 drawn += 1
 
-        if drawn == 0:
-            raise inkex.AbortExtension("Parsed the circuit, but did not find drawable elements with x=\"x1 y1 x2 y2\" coordinates.")
+                drawn_tag_counts[tag] = (
+                    drawn_tag_counts.get(
+                        tag,
+                        0
+                    )
+                    + 1
+                )
 
+            elif result == "generic":
+                generic += 1
 
+                generic_tag_counts[tag] = (
+                    generic_tag_counts.get(
+                        tag,
+                        0
+                    )
+                    + 1
+                )
+
+            else:
+                skipped += 1
+
+                skipped_tag_counts[tag] = (
+                    skipped_tag_counts.get(
+                        tag,
+                        0
+                    )
+                    + 1
+                )
+
+                skipped_details.append(
+                    f"<{tag}> could not be drawn; "
+                    f"attributes={dict(elem.attrib)}"
+                )
+
+                # Remove the empty group.
+                layer.remove(g)
+
+        report = etree.Element("desc")
+
+        report_lines = [
+            "CircuitJS import report",
+            f"All tag counts: {tag_counts}",
+            f"Recognised components drawn: {drawn}",
+            f"Recognised tag counts: {drawn_tag_counts}",
+            f"Generic components drawn: {generic}",
+            f"Generic tag counts: {generic_tag_counts}",
+            f"Skipped elements: {skipped}",
+            f"Skipped tag counts: {skipped_tag_counts}",
+        ]
+
+        if skipped_details:
+            report_lines.append(
+                "Skipped element details:"
+            )
+
+            report_lines.extend(
+                skipped_details
+            )
+
+        report.text = "\n".join(
+            report_lines
+        )
+
+        layer.append(report)
+
+        if drawn == 0 and generic == 0:
+            raise inkex.AbortExtension(
+                "Parsed the circuit, but did not find "
+                "drawable elements with "
+                'x="x1 y1 x2 y2" coordinates.'
+            )
 if __name__ == "__main__":
     FalstadImporter().run()
