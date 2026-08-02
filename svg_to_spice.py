@@ -1172,6 +1172,13 @@ def main() -> int:
         include_layers=layer_set if layer_set else None,
     )
 
+    inkex.errormsg(f"Wires found: {len(wires)}")
+    inkex.errormsg(f"Components found: {len(components)}")
+    
+    for c in components:
+        inkex.errormsg(
+            f"type={c.type} ref={getattr(c,'ref','?')} pins={len(c.pins)}"
+        )
 
     defaults = {
         "resistance": args.resistance,
