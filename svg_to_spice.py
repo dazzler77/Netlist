@@ -1297,6 +1297,26 @@ class SvgToSpice(inkex.EffectExtension):
                 include_layers=layer_set if layer_set else None,
             )
 
+
+            inkex.utils.debug("===== COMPONENT PINS =====")
+
+            for c in components:
+                for pin_num, pin in c.pins.items():
+                    inkex.utils.debug(
+                        f"{c.ref}.{pin_num} "
+                        f"a={pin.a} "
+                        f"b={pin.b}"
+                    )
+            
+            inkex.utils.debug("===== WIRES =====")
+            
+            for w in wires:
+                inkex.utils.debug(
+                    f"{w.element_id} "
+                    f"start={w.start} "
+                    f"end={w.end}"
+                )
+
             defaults = {
                 "resistance": self.options.resistance,
                 "inductance": self.options.inductance,
@@ -1400,45 +1420,38 @@ class SvgToSpice(inkex.EffectExtension):
             inkex.utils.debug(f"Components detected: {len(components)}")
             
             for c in components:
-                try:
-                    pin_list = sorted(c.pins.keys())
-            
-                    inkex.utils.debug(
-                        f"Component: "
-                        f"ref={c.ref} "
-                        f"type={c.component_type} "
-                        f"group={c.group_id} "
-                        f"pins={pin_list}"
-                    )
-            
-                    for pin_num, pin in c.pins.items():
-                        inkex.utils.debug(
-                            f"    Pin {pin_num}: "
-                            f"element={pin.element_id} "
-                            f"a=({pin.a.x:.2f},{pin.a.y:.2f}) "
-                            f"b=({pin.b.x:.2f},{pin.b.y:.2f})"
-                        )
-            
-                except Exception as exc:
-                    inkex.utils.debug(
-                        f"Error displaying component {getattr(c,'ref','?')}: {exc}"
-                    )
-            
-            inkex.utils.debug(f"Wires detected: {len(wires)}")
-            
-            for i, w in enumerate(wires, start=1):
-                try:
-                    inkex.utils.debug(
-                        f"Wire {i}: "
-                        f"id={w.element_id} "
-                        f"start=({w.start.x:.2f},{w.start.y:.2f}) "
-                        f"end=({w.end.x:.2f},{w.end.y:.2f}) "
-                        f"segments={len(w.segments)}"
-                    )
-                except Exception as exc:
-                    inkex.utils.debug(
-                        f"Error displaying wire {i}: {exc}"
-                    )
+
+            pin_list = sorted(c.pins.keys())
+        
+            inkex.utils.debug(
+                f"Component: "
+                f"ref={c.ref} "
+                f"type={c.component_type} "
+                f"group={c.group_id} "
+                f"pins={pin_list}"
+            )
+        
+            for pin_num, pin in c.pins.items():
+        
+                inkex.utils.debug(
+                    f"    Pin {pin_num}: "
+                    f"element={pin.element_id} "
+                    f"a={pin.a} "
+                    f"b={pin.b}"
+                )
+        
+        inkex.utils.debug(f"Wires detected: {len(wires)}")
+        
+        for i, w in enumerate(wires, start=1):
+        
+            inkex.utils.debug(
+                f"Wire {i}: "
+                f"id={w.element_id} "
+                f"start={w.start} "
+                f"end={w.end} "
+                f"segments={len(w.segments)}"
+            )
+
             
             inkex.utils.debug(f"Netlist lines generated: {len(netlist_lines)}")
             
