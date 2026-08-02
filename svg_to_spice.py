@@ -1421,26 +1421,26 @@ class SvgToSpice(inkex.EffectExtension):
             
             for c in components:
 
-            pin_list = sorted(c.pins.keys())
-        
-            inkex.utils.debug(
-                f"Component: "
-                f"ref={c.ref} "
-                f"type={c.component_type} "
-                f"group={c.group_id} "
-                f"pins={pin_list}"
-            )
-        
-            for pin_num, pin in c.pins.items():
-        
+                pin_list = sorted(c.pins.keys())
+            
                 inkex.utils.debug(
-                    f"    Pin {pin_num}: "
-                    f"element={pin.element_id} "
-                    f"a={pin.a} "
-                    f"b={pin.b}"
+                    f"Component: "
+                    f"ref={c.ref} "
+                    f"type={c.component_type} "
+                    f"group={c.group_id} "
+                    f"pins={pin_list}"
                 )
-        
-        inkex.utils.debug(f"Wires detected: {len(wires)}")
+            
+                for pin_num, pin in c.pins.items():
+            
+                    inkex.utils.debug(
+                        f"    Pin {pin_num}: "
+                        f"element={pin.element_id} "
+                        f"a={pin.a} "
+                        f"b={pin.b}"
+                    )
+            
+            inkex.utils.debug(f"Wires detected: {len(wires)}")
         
         for i, w in enumerate(wires, start=1):
         
