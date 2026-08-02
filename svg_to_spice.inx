@@ -4,6 +4,11 @@
   <name>SVG to SPICE Netlist</name>
   <id>com.yourname.svg_to_spice</id>
 
+  <param name="show_wirelist" type="bool" gui-text="Display Wirelist on Canvas">false</param>
+  <param name="show_netlist" type="bool" gui-text="Display SPICE Netlist on Canvas">false</param>
+  
+  <param name="text_x" type="float" gui-text="Text X Position">0</param>
+  <param name="text_y" type="float" gui-text="Text Y Position">0</param>
   <param name="out" type="string" gui-text="Netlist Output File">netlist.cir</param>
   <param name="wire_out" type="string" gui-text="Wirelist Output File">wirelist.csv</param>
 
