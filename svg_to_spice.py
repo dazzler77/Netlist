@@ -1384,9 +1384,76 @@ class SvgToSpice(inkex.EffectExtension):
             inkex.utils.debug(f"Wrote netlist: {out_path}")
             inkex.utils.debug(f"Wrote wirelist: {wire_out_path}")
 
+
+            
             for warning in net_warnings + wire_warnings:
                 inkex.errormsg("Warning: " + warning)
 
+
+            
+            # ---------------------------------------------------------
+            # Debug output
+            # ---------------------------------------------------------
+            
+            inkex.utils.debug("========== SVG TO SPICE DEBUG ==========")
+            
+            inkex.utils.debug(f"Components detected: {len(components)}")
+            
+            for c in components:
+                try:
+                    pin_list = sorted(c.pins.keys())
+            
+                    inkex.utils.debug(
+                        f"Component: "
+                        f"ref={c.ref} "
+                        f"type={c.component_type} "
+                        f"group={c.group_id} "
+                        f"pins={pin_list}"
+                    )
+            
+                    for pin_num, pin in c.pins.items():
+                        inkex.utils.debug(
+                            f"    Pin {pin_num}: "
+                            f"element={pin.element_id} "
+                            f"a=({pin.a.x:.2f},{pin.a.y:.2f}) "
+                            f"b=({pin.b.x:.2f},{pin.b.y:.2f})"
+                        )
+            
+                except Exception as exc:
+                    inkex.utils.debug(
+                        f"Error displaying component {getattr(c,'ref','?')}: {exc}"
+                    )
+            
+            inkex.utils.debug(f"Wires detected: {len(wires)}")
+            
+            for i, w in enumerate(wires, start=1):
+                try:
+                    inkex.utils.debug(
+                        f"Wire {i}: "
+                        f"id={w.element_id} "
+                        f"start=({w.start.x:.2f},{w.start.y:.2f}) "
+                        f"end=({w.end.x:.2f},{w.end.y:.2f}) "
+                        f"segments={len(w.segments)}"
+                    )
+                except Exception as exc:
+                    inkex.utils.debug(
+                        f"Error displaying wire {i}: {exc}"
+                    )
+            
+            inkex.utils.debug(f"Netlist lines generated: {len(netlist_lines)}")
+            
+            for line in netlist_lines:
+                inkex.utils.debug(f"NET: {line}")
+            
+            inkex.utils.debug(f"Wirelist rows generated: {len(wire_rows)}")
+            
+            inkex.utils.debug("=======================================")
+            
+
+
+
+
+        
         finally:
             # Tidy up temp file
             try:
