@@ -1400,9 +1400,24 @@ class SvgToSpice(inkex.EffectExtension):
 
             if self.options.show_wirelist:
 
-                wirelist_text = "\n".join(
-                    ",".join(map(str, row))
-                    for row in wire_rows
+                # Remove duplicate header rows
+                wirelist_lines = []
+
+                for row in wire_rows:
+
+                    row_text = ",".join(map(str, row))
+
+                    if (
+                        row_text.lower()
+                        == "wire_id,from_component,from_pin,to_component,to_pin,net"
+                    ):
+                        continue
+
+                    wirelist_lines.append(row_text)
+
+                wirelist_text = (
+                    "wire_id,from_component,from_pin,to_component,to_pin,net\n"
+                    + "\n".join(wirelist_lines)
                 )
 
                 self.add_text_block(
