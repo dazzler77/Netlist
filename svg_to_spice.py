@@ -1225,6 +1225,7 @@ def main() -> int:
 class SvgToSpice(inkex.EffectExtension):
 
     def add_arguments(self, pars):
+
         pars.add_argument("--out", type=str, default="netlist.cir")
         pars.add_argument("--wire_out", type=str, default="wirelist.csv")
         pars.add_argument("--tol", type=float, default=0.5)
@@ -1235,18 +1236,17 @@ class SvgToSpice(inkex.EffectExtension):
         pars.add_argument("--diode_model", type=str, default="Ddefault")
         pars.add_argument("--layers", type=str, default="")
 
-        # New options
         pars.add_argument("--show_netlist", type=inkex.Boolean, default=False)
         pars.add_argument("--show_wirelist", type=inkex.Boolean, default=False)
-    
+
         pars.add_argument("--text_x", type=float, default=0.0)
         pars.add_argument("--text_y", type=float, default=0.0)
 
     def add_text_block(self, parent, x, y, text, title):
-    
+
         group = inkex.Group()
         parent.add(group)
-    
+
         title_text = inkex.TextElement()
         title_text.set("x", str(x))
         title_text.set("y", str(y))
@@ -1257,7 +1257,7 @@ class SvgToSpice(inkex.EffectExtension):
         }
         title_text.text = title
         group.add(title_text)
-    
+
         txt = inkex.TextElement()
         txt.set("x", str(x))
         txt.set("y", str(y + 20))
@@ -1265,52 +1265,62 @@ class SvgToSpice(inkex.EffectExtension):
             "font-size": "10px",
             "font-family": "monospace",
         }
-    
+
         for i, line in enumerate(text.splitlines()):
             span = inkex.Tspan()
             span.set("x", str(x))
             span.set("y", str(y + 35 + i * 12))
             span.text = line
             txt.add(span)
-    
+
         group.add(txt)
-    
 
     def effect(self):
+
         import tempfile
         from pathlib import Path
         import xml.etree.ElementTree as ET
 
-        # Current SVG document in memory
         root = self.document.getroot()
         tree = ET.ElementTree(root)
 
-        # Save a temp SVG for your existing parser
         tmp_svg = Path(tempfile.mkstemp(suffix=".svg")[1])
+
         try:
+
             tree.write(tmp_svg)
 
-            layer_set = {s.strip() for s in self.options.layers.split(",") if s.strip()}
+            layer_set = {
+                s.strip()
+                for s in self.options.layers.split(",")
+                if s.strip()
+            }
 
             wires, components = collect_svg(
                 tmp_svg,
                 include_layers=layer_set if layer_set else None,
             )
 
+            # ---------------------------------------------------------
+            # Quick Connectivity Debug
+            # ---------------------------------------------------------
 
             inkex.utils.debug("===== COMPONENT PINS =====")
 
             for c in components:
+
                 for pin_num, pin in c.pins.items():
+
                     inkex.utils.debug(
                         f"{c.ref}.{pin_num} "
                         f"a={pin.a} "
                         f"b={pin.b}"
                     )
-            
+
             inkex.utils.debug("===== WIRES =====")
-            
+
             for w in wires:
+
                 inkex.utils.debug(
                     f"{w.element_id} "
                     f"start={w.start} "
@@ -1337,46 +1347,49 @@ class SvgToSpice(inkex.EffectExtension):
                 tol=self.options.tol,
             )
 
-            # IMPORTANT:
-            # self.options.input_file -> temp file passed by Inkscape
-            # self.svg_path() + self.svg.name -> original saved SVG location/name
             svg_dir = self.svg_path()
             svg_name = self.svg.name
 
             if not svg_dir or not svg_name:
-                inkex.errormsg("Please save the SVG before running this extension.")
+                inkex.errormsg(
+                    "Please save the SVG before running this extension."
+                )
                 return
 
             svg_path = Path(svg_dir) / svg_name
+
             output_folder = svg_path.parent
             base = svg_path.stem
 
-            # Save beside the actual SVG being edited
             out_path = output_folder / f"{base}.cir"
             wire_out_path = output_folder / f"{base}_wirelist.csv"
 
             with out_path.open("w", encoding="utf-8") as f:
+
                 f.write("* SVG extracted SPICE-like netlist\n")
+
                 for line in netlist_lines:
                     f.write(line + "\n")
+
                 f.write(".end\n")
 
-            write_wirelist_csv(wire_rows, wire_out_path)
-
-
+            write_wirelist_csv(
+                wire_rows,
+                wire_out_path,
+            )
 
             # ---------------------------------------------------------
             # Optional canvas output
             # ---------------------------------------------------------
-            
+
             layer = self.svg.get_current_layer()
-            
+
             if self.options.show_netlist:
-            
+
                 netlist_text = "* SVG extracted SPICE-like netlist\n"
                 netlist_text += "\n".join(netlist_lines)
                 netlist_text += "\n.end"
-            
+
                 self.add_text_block(
                     layer,
                     self.options.text_x,
@@ -1384,14 +1397,14 @@ class SvgToSpice(inkex.EffectExtension):
                     netlist_text,
                     "SPICE NETLIST",
                 )
-            
+
             if self.options.show_wirelist:
-            
+
                 wirelist_text = "\n".join(
                     ",".join(map(str, row))
                     for row in wire_rows
                 )
-            
+
                 self.add_text_block(
                     layer,
                     self.options.text_x + 400,
@@ -1400,29 +1413,35 @@ class SvgToSpice(inkex.EffectExtension):
                     "WIRELIST",
                 )
 
-            
-            inkex.utils.debug(f"Wrote netlist: {out_path}")
-            inkex.utils.debug(f"Wrote wirelist: {wire_out_path}")
+            inkex.utils.debug(
+                f"Wrote netlist: {out_path}"
+            )
 
+            inkex.utils.debug(
+                f"Wrote wirelist: {wire_out_path}"
+            )
 
-            
             for warning in net_warnings + wire_warnings:
-                inkex.errormsg("Warning: " + warning)
+                inkex.errormsg(
+                    "Warning: " + warning
+                )
 
+            # ---------------------------------------------------------
+            # Detailed Debug Output
+            # ---------------------------------------------------------
 
-            
-            # ---------------------------------------------------------
-            # Debug output
-            # ---------------------------------------------------------
-            
-            inkex.utils.debug("========== SVG TO SPICE DEBUG ==========")
-            
-            inkex.utils.debug(f"Components detected: {len(components)}")
-            
+            inkex.utils.debug(
+                "========== SVG TO SPICE DEBUG =========="
+            )
+
+            inkex.utils.debug(
+                f"Components detected: {len(components)}"
+            )
+
             for c in components:
 
                 pin_list = sorted(c.pins.keys())
-            
+
                 inkex.utils.debug(
                     f"Component: "
                     f"ref={c.ref} "
@@ -1430,47 +1449,53 @@ class SvgToSpice(inkex.EffectExtension):
                     f"group={c.group_id} "
                     f"pins={pin_list}"
                 )
-            
+
                 for pin_num, pin in c.pins.items():
-            
+
                     inkex.utils.debug(
                         f"    Pin {pin_num}: "
                         f"element={pin.element_id} "
                         f"a={pin.a} "
                         f"b={pin.b}"
                     )
-            
-            inkex.utils.debug(f"Wires detected: {len(wires)}")
-        
-        for i, w in enumerate(wires, start=1):
-        
+
             inkex.utils.debug(
-                f"Wire {i}: "
-                f"id={w.element_id} "
-                f"start={w.start} "
-                f"end={w.end} "
-                f"segments={len(w.segments)}"
+                f"Wires detected: {len(wires)}"
             )
 
-            
-            inkex.utils.debug(f"Netlist lines generated: {len(netlist_lines)}")
-            
+            for i, w in enumerate(wires, start=1):
+
+                inkex.utils.debug(
+                    f"Wire {i}: "
+                    f"id={w.element_id} "
+                    f"start={w.start} "
+                    f"end={w.end} "
+                    f"segments={len(w.segments)}"
+                )
+
+            inkex.utils.debug(
+                f"Netlist lines generated: {len(netlist_lines)}"
+            )
+
             for line in netlist_lines:
-                inkex.utils.debug(f"NET: {line}")
-            
-            inkex.utils.debug(f"Wirelist rows generated: {len(wire_rows)}")
-            
-            inkex.utils.debug("=======================================")
-            
 
+                inkex.utils.debug(
+                    f"NET: {line}"
+                )
 
+            inkex.utils.debug(
+                f"Wirelist rows generated: {len(wire_rows)}"
+            )
 
+            inkex.utils.debug(
+                "======================================="
+            )
 
-        
         finally:
-            # Tidy up temp file
+
             try:
                 tmp_svg.unlink(missing_ok=True)
+
             except Exception:
                 pass
 
