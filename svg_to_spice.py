@@ -10,6 +10,7 @@ import math
 import re
 import sys
 import xml.etree.ElementTree as ET
+from lxml import etree
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 import tempfile
@@ -992,6 +993,7 @@ def make_spice_netlist(
 # Wirelist generation
 # ---------------------------------------------------------------------
 
+
 def endpoint_pins(
     point: Point,
     components: List[Component],
@@ -1226,6 +1228,47 @@ class SvgToSpice(inkex.EffectExtension):
         pars.add_argument("--diode_model", type=str, default="Ddefault")
         pars.add_argument("--layers", type=str, default="")
 
+        # New options
+        pars.add_argument("--show_netlist", type=inkex.Boolean, default=False)
+        pars.add_argument("--show_wirelist", type=inkex.Boolean, default=False)
+    
+        pars.add_argument("--text_x", type=float, default=0.0)
+        pars.add_argument("--text_y", type=float, default=0.0)
+
+    def add_text_block(self, parent, x, y, text, title):
+    
+        group = inkex.Group()
+        parent.add(group)
+    
+        title_text = inkex.TextElement()
+        title_text.set("x", str(x))
+        title_text.set("y", str(y))
+        title_text.style = {
+            "font-size": "14px",
+            "font-family": "monospace",
+            "font-weight": "bold",
+        }
+        title_text.text = title
+        group.add(title_text)
+    
+        txt = inkex.TextElement()
+        txt.set("x", str(x))
+        txt.set("y", str(y + 20))
+        txt.style = {
+            "font-size": "10px",
+            "font-family": "monospace",
+        }
+    
+        for i, line in enumerate(text.splitlines()):
+            span = inkex.Tspan()
+            span.set("x", str(x))
+            span.set("y", str(y + 35 + i * 12))
+            span.text = line
+            txt.add(span)
+    
+        group.add(txt)
+    
+
     def effect(self):
         import tempfile
         from pathlib import Path
@@ -1293,6 +1336,44 @@ class SvgToSpice(inkex.EffectExtension):
 
             write_wirelist_csv(wire_rows, wire_out_path)
 
+
+
+            # ---------------------------------------------------------
+            # Optional canvas output
+            # ---------------------------------------------------------
+            
+            layer = self.svg.get_current_layer()
+            
+            if self.options.show_netlist:
+            
+                netlist_text = "* SVG extracted SPICE-like netlist\n"
+                netlist_text += "\n".join(netlist_lines)
+                netlist_text += "\n.end"
+            
+                self.add_text_block(
+                    layer,
+                    self.options.text_x,
+                    self.options.text_y,
+                    netlist_text,
+                    "SPICE NETLIST",
+                )
+            
+            if self.options.show_wirelist:
+            
+                wirelist_text = "\n".join(
+                    ",".join(map(str, row))
+                    for row in wire_rows
+                )
+            
+                self.add_text_block(
+                    layer,
+                    self.options.text_x + 400,
+                    self.options.text_y,
+                    wirelist_text,
+                    "WIRELIST",
+                )
+
+            
             inkex.utils.debug(f"Wrote netlist: {out_path}")
             inkex.utils.debug(f"Wrote wirelist: {wire_out_path}")
 
