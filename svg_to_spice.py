@@ -1169,13 +1169,94 @@ def make_spice_netlist(
     tol: float,
     defaults: Dict[str, str],
 ) -> Tuple[List[str], List[str]]:
+
     key_to_net, _ = build_wire_nets(wires, tol)
 
     lines: List[str] = []
     warnings: List[str] = []
     used_diode_models: Set[str] = set()
 
-    for comp in sorted(components, key=lambda c: c.ref):
+    def not_connected_node_for_pin_id(pin_id: str) -> str:
+        return (
+            pin_id.replace(".", "_")
+            + "_not_connected"
+        )
+
+    def not_connected_node_for_missing_pin(
+        comp_ref: str,
+        pin_num: str,
+    ) -> str:
+        return (
+            f"{comp_ref}.pin{pin_num}".replace(".", "_")
+            + "_not_connected"
+        )
+
+    def node_for_pin(
+        comp: Component,
+        pin_num: str,
+    ) -> str:
+        """
+        Return the SPICE node for a component pin.
+
+        Rules:
+            - if the pin touches exactly one net, use that net
+            - if the pin touches no nets, create a synthetic not_connected node
+            - if the pin touches multiple nets, warn and choose one deterministically
+            - if the pin does not exist, create a synthetic missing-pin node
+        """
+
+        pin = comp.pins.get(pin_num)
+
+        if pin is None:
+            node = not_connected_node_for_missing_pin(
+                comp.ref,
+                pin_num,
+            )
+
+            warnings.append(
+                f"{comp.ref}: missing pin {pin_num}; "
+                f"using synthetic node {node}"
+            )
+
+            return node
+
+        nets = pin_touching_nets(
+            pin,
+            wires,
+            key_to_net,
+            tol,
+        )
+
+        if len(nets) == 1:
+            return next(iter(nets))
+
+        if len(nets) == 0:
+            node = not_connected_node_for_pin_id(
+                pin.element_id
+            )
+
+            warnings.append(
+                f"{comp.ref}: pin {pin_num} is not connected; "
+                f"using synthetic node {node}"
+            )
+
+            return node
+
+        # More than one net touching the same pin.
+        # Still emit the component, but make the choice deterministic.
+        chosen = sorted(nets)[0]
+
+        warnings.append(
+            f"{comp.ref}: pin {pin_num} touches multiple nets "
+            f"{sorted(nets)}; using {chosen}"
+        )
+
+        return chosen
+
+    for comp in sorted(
+        components,
+        key=lambda c: c.ref,
+    ):
 
         if comp.component_type == "generic":
 
@@ -1185,50 +1266,57 @@ def make_spice_netlist(
 
             continue
 
-        extra_pins = sorted(set(comp.pins) - {"1", "2"})
+        # -----------------------------------------------------
+        # Include every non-generic component that has at least
+        # one pin. Do not skip just because one pin is floating.
+        # -----------------------------------------------------
+
+        if not comp.pins:
+
+            warnings.append(
+                f"{comp.ref}: {comp.component_type} has no pins; skipped"
+            )
+
+            continue
+
+        extra_pins = sorted(
+            set(comp.pins) - {"1", "2"}
+        )
 
         if extra_pins:
+
             warnings.append(
                 f"{comp.ref}: {comp.component_type} only supports pin 1 and pin 2. "
                 f"Extra pins ignored: {extra_pins}"
             )
 
-        pin1 = comp.pins.get("1")
-        pin2 = comp.pins.get("2")
+        # -----------------------------------------------------
+        # Two-terminal SPICE output.
+        #
+        # If pin 1 or pin 2 is missing or unconnected, use a
+        # synthetic not_connected node instead of skipping.
+        # -----------------------------------------------------
 
-        if pin1 is None or pin2 is None:
-            warnings.append(
-                f"{comp.ref}: {comp.component_type} must have pin 1 and pin 2. "
-                f"Found pins: {sorted(comp.pins)}"
-            )
-            continue
+        net1 = node_for_pin(
+            comp,
+            "1",
+        )
 
-        pin1_nets = pin_touching_nets(pin1, wires, key_to_net, tol)
-        pin2_nets = pin_touching_nets(pin2, wires, key_to_net, tol)
-
-        if len(pin1_nets) != 1:
-            warnings.append(
-                f"{comp.ref}: pin 1 must touch exactly one net. "
-                f"Found: {sorted(pin1_nets) or 'none'}"
-            )
-            continue
-
-        if len(pin2_nets) != 1:
-            warnings.append(
-                f"{comp.ref}: pin 2 must touch exactly one net. "
-                f"Found: {sorted(pin2_nets) or 'none'}"
-            )
-            continue
-
-        net1 = next(iter(pin1_nets))
-        net2 = next(iter(pin2_nets))
+        net2 = node_for_pin(
+            comp,
+            "2",
+        )
 
         if net1 == net2:
+
             warnings.append(
                 f"{comp.ref}: pin 1 and pin 2 are connected to the same net {net1}"
             )
 
-        value = component_value(comp.component_type, defaults)
+        value = component_value(
+            comp.component_type,
+            defaults,
+        )
 
         lines.append(
             f"{spice_ref(comp.ref, comp.component_type)} {net1} {net2} {value}"
@@ -1238,8 +1326,12 @@ def make_spice_netlist(
             used_diode_models.add(value)
 
     for model in sorted(used_diode_models):
+
         if model == defaults["diode_model"]:
-            lines.append(f".model {model} D")
+
+            lines.append(
+                f".model {model} D"
+            )
 
     return lines, warnings
 
@@ -1272,63 +1364,267 @@ def make_wirelist(
     """
     Point-to-point wire list.
 
-    A wire is listed only when:
-        - the wire object has one start endpoint and one end endpoint
-        - the start endpoint touches exactly one component pin
-        - the end endpoint touches exactly one component pin
+    Rules:
+        - Normal wire:
+              component <-> component
 
-    This is separate from the netlist. The netlist joins all touching wires
-    into nodes. The wirelist keeps direct physical wire objects.
+        - Dangling wire:
+              component <-> open circuit
+
+        - Floating component pins:
+              warning only
+              no wirelist row
+
     """
+
+    import re
+
     rows: List[Dict[str, str]] = []
     warnings: List[str] = []
 
     key_to_net, _ = build_wire_nets(wires, tol)
 
-    for wire in sorted(wires, key=lambda w: w.element_id):
-        start_hits = endpoint_pins(wire.start, components, tol)
-        end_hits = endpoint_pins(wire.end, components, tol)
+    connected_pins = set()
 
-        if not start_hits and not end_hits:
+    # ---------------------------------------------------------
+    # Determine next available net number
+    # ---------------------------------------------------------
+
+    max_net_num = 0
+
+    for net_name in key_to_net.values():
+
+        if not isinstance(net_name, str):
             continue
 
-        if len(start_hits) != 1 or len(end_hits) != 1:
-            warnings.append(
-                f"wire {wire.element_id}: wirelist requires exactly one component pin "
-                f"at each endpoint. "
-                f"Start: {[p.component + '.' + p.pin_number for p in start_hits] or 'none'}, "
-                f"End: {[p.component + '.' + p.pin_number for p in end_hits] or 'none'}"
+        m = re.fullmatch(r"N(\d+)", net_name)
+
+        if m:
+            max_net_num = max(
+                max_net_num,
+                int(m.group(1)),
             )
-            continue
 
-        a = start_hits[0]
-        b = end_hits[0]
+    next_net_num = max_net_num + 1
 
-        if a.component == b.component and a.pin_number == b.pin_number:
-            warnings.append(
-                f"wire {wire.element_id}: both endpoints touch the same pin "
-                f"{a.component}.{a.pin_number}; skipped"
-            )
-            continue
+    fallback_wire_nets = {}
+
+    def get_wire_net(wire):
+
+        nonlocal next_net_num
 
         net = ""
 
         if wire.segments:
-            net = net_for_wire_segment(wire.segments[0], key_to_net, tol) or ""
 
-        rows.append(
-            {
-                "wire_id": wire.element_id,
-                "from_component": a.component,
-                "from_pin": a.pin_number,
-                "to_component": b.component,
-                "to_pin": b.pin_number,
-                "net": net,
-            }
+            net = (
+                net_for_wire_segment(
+                    wire.segments[0],
+                    key_to_net,
+                    tol,
+                )
+                or ""
+            )
+
+        if net:
+            return net
+
+        if wire.element_id not in fallback_wire_nets:
+
+            fallback_wire_nets[wire.element_id] = (
+                f"N{next_net_num:03d}"
+            )
+
+            next_net_num += 1
+
+        return fallback_wire_nets[wire.element_id]
+
+    # ---------------------------------------------------------
+    # Process each wire
+    # ---------------------------------------------------------
+
+    for wire in sorted(
+        wires,
+        key=lambda w: w.element_id,
+    ):
+
+        start_hits = endpoint_pins(
+            wire.start,
+            components,
+            tol,
         )
 
-    return rows, warnings
+        end_hits = endpoint_pins(
+            wire.end,
+            components,
+            tol,
+        )
 
+        # -----------------------------------------------------
+        # Any pin touched by a wire endpoint is considered
+        # connected, even if the wire is dangling.
+        # -----------------------------------------------------
+
+        for p in start_hits:
+
+            connected_pins.add(
+                (
+                    p.component,
+                    str(p.pin_number),
+                )
+            )
+
+        for p in end_hits:
+
+            connected_pins.add(
+                (
+                    p.component,
+                    str(p.pin_number),
+                )
+            )
+
+        if not start_hits and not end_hits:
+            continue
+
+        net = get_wire_net(wire)
+
+        # -----------------------------------------------------
+        # Normal connection:
+        # one component pin at each end
+        # -----------------------------------------------------
+
+        if (
+            len(start_hits) == 1
+            and len(end_hits) == 1
+        ):
+
+            a = start_hits[0]
+            b = end_hits[0]
+
+            if (
+                a.component == b.component
+                and a.pin_number == b.pin_number
+            ):
+
+                warnings.append(
+                    f"wire {wire.element_id}: "
+                    f"both endpoints touch "
+                    f"{a.component}.{a.pin_number}"
+                )
+
+                continue
+
+            rows.append(
+                {
+                    "wire_id": wire.element_id,
+                    "from_component": a.component,
+                    "from_pin": str(a.pin_number),
+                    "to_component": b.component,
+                    "to_pin": str(b.pin_number),
+                    "net": net,
+                }
+            )
+
+            continue
+
+        # -----------------------------------------------------
+        # Dangling wire:
+        # component at start only
+        # -----------------------------------------------------
+
+        if (
+            len(start_hits) == 1
+            and len(end_hits) == 0
+        ):
+
+            a = start_hits[0]
+
+            rows.append(
+                {
+                    "wire_id": wire.element_id,
+                    "from_component": a.component,
+                    "from_pin": str(a.pin_number),
+                    "to_component": "not_connected",
+                    "to_pin": "not_connected",
+                    "net": net,
+                }
+            )
+
+            warnings.append(
+                f"wire {wire.element_id}: "
+                f"dangling wire connected to "
+                f"{a.component}.{a.pin_number}"
+            )
+
+            continue
+
+        # -----------------------------------------------------
+        # Dangling wire:
+        # component at end only
+        # -----------------------------------------------------
+
+        if (
+            len(start_hits) == 0
+            and len(end_hits) == 1
+        ):
+
+            b = end_hits[0]
+
+            rows.append(
+                {
+                    "wire_id": wire.element_id,
+                    "from_component": b.component,
+                    "from_pin": str(b.pin_number),
+                    "to_component": "not_connected",
+                    "to_pin": "not_connected",
+                    "net": net,
+                }
+            )
+
+            warnings.append(
+                f"wire {wire.element_id}: "
+                f"dangling wire connected to "
+                f"{b.component}.{b.pin_number}"
+            )
+
+            continue
+
+        # -----------------------------------------------------
+        # Ambiguous connection
+        # -----------------------------------------------------
+
+        warnings.append(
+            f"wire {wire.element_id}: "
+            f"wirelist requires zero or one component pin "
+            f"at each endpoint. "
+            f"Start: "
+            f"{[p.component + '.' + str(p.pin_number) for p in start_hits] or 'none'}, "
+            f"End: "
+            f"{[p.component + '.' + str(p.pin_number) for p in end_hits] or 'none'}"
+        )
+
+    # ---------------------------------------------------------
+    # Floating pins:
+    # warning only
+    # ---------------------------------------------------------
+
+    for comp in components:
+
+        for pin_num, pin in comp.pins.items():
+
+            key = (
+                comp.ref,
+                str(pin_num),
+            )
+
+            if key in connected_pins:
+                continue
+
+            warnings.append(
+                f"{comp.ref}.{pin_num} is not connected"
+            )
+
+    return rows, warnings
 
 def write_wirelist_csv(
     rows: List[Dict[str, str]],
