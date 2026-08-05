@@ -69,6 +69,34 @@ COMPONENT_ALIASES = {
     "diode": "diode",
 }
 
+COMPONENT_PREFIXES = {
+    "R": "resistor",
+    "C": "capacitor",
+    "L": "inductor",
+    "D": "diode",
+
+    # future
+    "SW": "switch",
+    "J": "connector",
+    "TP": "testpoint",
+}
+
+
+TEXT_TAGS = {
+    "#id",
+    "#wire",
+    "#node",
+    "#title",
+    "#label",
+    "#description",
+
+    "@id",
+    "@wire",
+    "@node",
+    "@title",
+    "@label",
+    "@description",
+}
 
 # ---------------------------------------------------------------------
 # SVG helpers
@@ -83,6 +111,15 @@ def child_title(el: ET.Element) -> str:
         if local_name(child.tag) == "title" and child.text:
             return child.text.strip()
     return ""
+
+def find_element_by_id(root, element_id):
+
+    for el in root.iter():
+
+        if el.get("id") == element_id:
+            return el
+
+    return None
 
 
 def inkscape_label(el: ET.Element) -> str:
@@ -110,6 +147,45 @@ def build_parent_map(root: ET.Element) -> Dict[ET.Element, ET.Element]:
         for parent in root.iter()
         for child in list(parent)
     }
+
+SVG_DEFINITION_TAGS = {
+    "defs",
+    "clipPath",
+    "mask",
+    "marker",
+    "pattern",
+    "symbol",
+    "filter",
+    "linearGradient",
+    "radialGradient",
+}
+
+
+def is_inside_definition(
+    el: ET.Element,
+    parent_map: Dict[ET.Element, ET.Element],
+) -> bool:
+
+    cur = el
+
+    while cur is not None:
+
+        tag = local_name(cur.tag)
+
+        if tag in SVG_DEFINITION_TAGS:
+
+            inkex.utils.debug(
+                f"Ignoring definition object: "
+                f"id={element_name(el)} "
+                f"tag={local_name(el.tag)} "
+                f"inside {tag}"
+            )
+
+            return True
+
+        cur = parent_map.get(cur)
+
+    return False
 
 
 def descendants(el: ET.Element) -> Iterable[ET.Element]:
@@ -146,6 +222,69 @@ def element_in_selected_layers(
 
     # No layer = include (safe fallback)
     return True
+    
+def wire_distance(wire, p):
+
+    best = float("inf")
+
+    for seg in wire.segments:
+
+        best = min(
+            best,
+            point_to_segment_distance(
+                p,
+                seg.a,
+                seg.b
+            )
+        )
+
+    return best
+
+
+def nearest_wire(p, wires):
+
+    best_wire = None
+    best_dist = float("inf")
+
+    for wire in wires:
+
+        d = wire_distance(wire, p)
+
+        if d < best_dist:
+            best_dist = d
+            best_wire = wire
+
+    return best_wire
+    
+    
+def component_distance(comp, p):
+
+    best = float("inf")
+
+    for pin in comp.pins.values():
+
+        best = min(best, dist(p, pin.a))
+        best = min(best, dist(p, pin.b))
+
+    return best
+
+
+def nearest_component(p, components):
+
+    best = None
+    best_dist = float("inf")
+
+    for comp in components:
+
+        d = component_distance(comp, p)
+
+        if d < best_dist:
+            best_dist = d
+            best = comp
+
+    return best
+  
+
 # ---------------------------------------------------------------------
 # Transform handling
 # ---------------------------------------------------------------------
@@ -246,6 +385,37 @@ def element_world_matrix(
 def dist(a: Point, b: Point) -> float:
     return math.hypot(a[0] - b[0], a[1] - b[1])
 
+def point_to_segment_distance(
+    p,
+    a,
+    b,
+):
+
+    ax, ay = a
+    bx, by = b
+    px, py = p
+
+    dx = bx - ax
+    dy = by - ay
+
+    length2 = dx * dx + dy * dy
+
+    if length2 == 0:
+        return dist(p, a)
+
+    t = (
+        ((px - ax) * dx + (py - ay) * dy)
+        / length2
+    )
+
+    t = max(0.0, min(1.0, t))
+
+    closest = (
+        ax + t * dx,
+        ay + t * dy,
+    )
+
+    return dist(p, closest)
 
 def point_key(p: Point, tol: float) -> Tuple[int, int]:
     return (
@@ -254,13 +424,15 @@ def point_key(p: Point, tol: float) -> Tuple[int, int]:
     )
 
 
-def point_on_segment(p: Point, a: Point, b: Point, tol: float) -> bool:
+def point_on_segment(p, a, b, tol):
+
     ax, ay = a
     bx, by = b
     px, py = p
 
     dx = bx - ax
     dy = by - ay
+
     length2 = dx * dx + dy * dy
 
     if length2 <= tol * tol:
@@ -268,8 +440,15 @@ def point_on_segment(p: Point, a: Point, b: Point, tol: float) -> bool:
 
     t = ((px - ax) * dx + (py - ay) * dy) / length2
 
-    if t < -tol or t > 1 + tol:
-        return False
+    # Before start of segment:
+    # only accept if actually close to endpoint a.
+    if t < 0.0:
+        return dist(p, a) <= tol
+
+    # After end of segment:
+    # only accept if actually close to endpoint b.
+    if t > 1.0:
+        return dist(p, b) <= tol
 
     closest = (
         ax + t * dx,
@@ -498,38 +677,44 @@ class Component:
 # Component and pin detection
 # ---------------------------------------------------------------------
 
-def group_component_type(el: ET.Element) -> Optional[str]:
-    """
-    A component is a group with Title or Inkscape label:
+def infer_component_type(ref):
 
-        resistor
-        inductor
-        capacitor
-        diode
+    ref = ref.upper()
 
-    Example:
-
-        <g id="R1">
-          <title>resistor</title>
-          ...
-        </g>
-    """
-    if local_name(el.tag) != "g":
-        return None
-
-    candidates = [
-        child_title(el),
-        inkscape_label(el),
-    ]
-
-    for text in candidates:
-        key = text.strip().lower()
-
-        if key in COMPONENT_ALIASES:
-            return COMPONENT_ALIASES[key]
+    for prefix in sorted(
+        COMPONENT_PREFIXES,
+        key=len,
+        reverse=True,
+    ):
+        if ref.startswith(prefix):
+            return COMPONENT_PREFIXES[prefix]
 
     return None
 
+
+def group_component_type(el: ET.Element) -> Optional[str]:
+
+    if local_name(el.tag) != "g":
+        return None
+
+    if is_layer(el):
+        return None
+
+    pin_count = 0
+
+    for child in list(el):
+
+        if get_pin_number(child) is not None:
+            pin_count += 1
+
+    if pin_count < 2:
+        return None
+
+    ctype = infer_component_type(
+        element_name(el)
+    )
+
+    return ctype or "generic"
 
 def get_pin_number(el: ET.Element) -> Optional[str]:
     """
@@ -655,6 +840,10 @@ def collect_svg(
     # COMPONENT COLLECTION (layer filtered)
     # -------------------------------------------------------------
     for el in root.iter():
+
+        if is_inside_definition(el, parent):
+            continue
+
         # LAYER FILTER
         if selected_layers and not element_in_selected_layers(
             el,
@@ -722,10 +911,15 @@ def collect_svg(
     # WIRE COLLECTION (layer filtered)
     # -------------------------------------------------------------
     for el in root.iter():
+
+        if is_inside_definition(el, parent):
+            continue
+
         tag = local_name(el.tag)
 
         if tag not in {"path", "line"}:
             continue
+
 
         # LAYER FILTER
         if selected_layers and not element_in_selected_layers(
@@ -738,6 +932,15 @@ def collect_svg(
         # Anything inside a component group is part of the component,
         # not an external wire.
         if el in element_to_component_group:
+
+            owner = element_to_component_group[el]
+
+            inkex.utils.debug(
+                f"Skipping as component geometry: "
+                f"{element_name(el)} "
+                f"owned by {element_name(owner)}"
+            )
+
             continue
 
         # A standalone titled pin is not a wire.
@@ -784,58 +987,54 @@ def all_wire_segments(wires: List[Wire]) -> List[Tuple[str, Segment]]:
     return out
 
 
-def build_wire_nets(
-    wires: List[Wire],
-    tol: float,
-) -> Tuple[Dict[Tuple[int, int], str], DSU]:
+def build_wire_nets(wires, tol):
     """
-    Any wires/paths touching each other become the same net.
+    Build electrical nets from wire geometry.
 
-    This includes:
+    Connects:
         - endpoint to endpoint
-        - endpoint touching another segment
-        - crossing/intersection of two wire segments
-        - overlapping straight segments where endpoints lie on each other
+        - endpoint to segment
+        - segment chains within the same path
+
+    Does NOT connect:
+        - plain middle-to-middle visual crossings
     """
+
     segments = all_wire_segments(wires)
     dsu = DSU()
-    points: List[Point] = []
 
-    for _, s in segments:
+    # Only real segment endpoints are allowed to become junction candidates.
+    points = []
+
+    for wire_id, s in segments:
         points.append(s.a)
         points.append(s.b)
 
-    # Crossing intersections.
-    for i, (_, s1) in enumerate(segments):
-        for _, s2 in segments[i + 1:]:
-            p = segment_intersection(s1.a, s1.b, s2.a, s2.b, tol)
-
-            if p is not None:
-                points.append(p)
-
-    # T-junctions and endpoint-on-segment cases.
-    for p in list(points):
-        for _, s in segments:
-            if point_on_segment(p, s.a, s.b, tol):
-                points.append(p)
-
+    # Add every endpoint to the union-find.
     for p in points:
         dsu.add(point_key(p, tol))
 
-    for _, s in segments:
+    # For each segment, find all existing endpoints that lie on it.
+    # Then union them along that segment.
+    for wire_id, s in segments:
+
         ax, ay = s.a
         bx, by = s.b
+
         dx = bx - ax
         dy = by - ay
+
         length2 = dx * dx + dy * dy
 
         if length2 <= tol * tol:
             continue
 
-        on_this: List[Tuple[float, Tuple[int, int]]] = []
+        on_this = []
 
         for p in points:
+
             if point_on_segment(p, s.a, s.b, tol):
+
                 t = ((p[0] - ax) * dx + (p[1] - ay) * dy) / length2
 
                 on_this.append(
@@ -847,10 +1046,34 @@ def build_wire_nets(
 
         on_this.sort(key=lambda item: item[0])
 
-        for (_, k1), (_, k2) in zip(on_this, on_this[1:]):
+        # Remove duplicate endpoint keys.
+        unique_on_this = []
+
+        last_key = None
+
+        for t, key in on_this:
+
+            if key != last_key:
+                unique_on_this.append((t, key))
+                last_key = key
+
+        # If two or more known endpoints lie on this segment,
+        # they are electrically connected by this segment.
+        for item1, item2 in zip(unique_on_this, unique_on_this[1:]):
+
+            k1 = item1[1]
+            k2 = item2[1]
+
+            inkex.utils.debug(
+                f"CONNECT endpoint-on-segment: "
+                f"{wire_id} {k1} <-> {k2}"
+            )
+
             dsu.union(k1, k2)
 
-    roots = sorted({dsu.find(k) for k in dsu.parent})
+    roots = sorted(
+        {dsu.find(k) for k in dsu.parent}
+    )
 
     root_to_net = {
         root: f"N{idx + 1:03d}"
@@ -901,7 +1124,18 @@ def pin_touching_nets(
 
 
 def spice_ref(ref: str, ctype: str) -> str:
-    prefix = str(COMPONENT_TYPES[ctype]["prefix"])
+
+    info = COMPONENT_TYPES.get(ctype)
+
+    if info is None:
+
+        inkex.utils.debug(
+            f"Unknown component type: {ctype}"
+        )
+
+        return ref
+
+    prefix = str(info["prefix"])
 
     if ref.upper().startswith(prefix):
         return ref
@@ -913,7 +1147,19 @@ def component_value(
     ctype: str,
     defaults: Dict[str, str],
 ) -> str:
-    arg = str(COMPONENT_TYPES[ctype]["default_arg"])
+
+    info = COMPONENT_TYPES.get(ctype)
+
+    if info is None:
+
+        inkex.utils.debug(
+            f"Unknown component type: {ctype}"
+        )
+
+        return ""
+
+    arg = str(info["default_arg"])
+
     return defaults[arg]
 
 
@@ -930,6 +1176,15 @@ def make_spice_netlist(
     used_diode_models: Set[str] = set()
 
     for comp in sorted(components, key=lambda c: c.ref):
+
+        if comp.component_type == "generic":
+
+            warnings.append(
+                f"{comp.ref}: generic component skipped"
+            )
+
+            continue
+
         extra_pins = sorted(set(comp.pins) - {"1", "2"})
 
         if extra_pins:
@@ -1241,6 +1496,402 @@ class SvgToSpice(inkex.EffectExtension):
 
         pars.add_argument("--text_x", type=float, default=0.0)
         pars.add_argument("--text_y", type=float, default=0.0)
+ 
+
+    def update_text_placeholders(
+        self,
+        wires,
+        wire_rows,
+        components,
+        root,
+    ):
+
+        # Build lookup from wire_id -> wirelist row
+        wire_lookup = {
+            row["wire_id"]: row
+            for row in wire_rows
+        }
+
+        for el in root.iter():
+
+            if local_name(el.tag) != "text":
+                continue
+
+            # Read all tspan text
+            text_content = ""
+
+            for child in el:
+
+                if local_name(child.tag) == "tspan":
+                    text_content += (child.text or "")
+
+            token = child_title(el).lower()
+            
+            is_wire_tag = token.startswith("#")
+            is_component_tag = token.startswith("@")
+            
+            inkex.utils.debug(
+                f'text={el.get("id")} token="{token}"'
+            )
+
+            if token not in TEXT_TAGS:
+                continue
+
+            try:
+                x = float(el.get("x"))
+                y = float(el.get("y"))
+            except Exception:
+                continue
+
+            nearest_wire_obj = None
+            nearest_component_obj = None
+
+            if is_wire_tag:
+
+                nearest_wire_obj = nearest_wire(
+                    (x, y),
+                    wires,
+                )
+
+            if is_component_tag:
+
+                nearest_component_obj = nearest_component(
+                    (x, y),
+                    components,
+                )
+
+            if is_wire_tag and nearest_wire_obj is None:
+                continue
+
+            if is_component_tag and nearest_component_obj is None:
+                continue
+
+            replacement = ""
+
+            if token == "#id":
+
+                replacement = nearest_wire_obj.element_id
+
+            elif token == "#node":
+
+                row = wire_lookup.get(
+                    nearest_wire_obj.element_id
+                )
+
+                if row:
+                    replacement = row["net"]
+
+            elif token == "#wire":
+
+                row = wire_lookup.get(
+                    nearest_wire_obj.element_id
+                )
+
+                if row:
+
+                    replacement = (
+                        f'{row["from_component"]}.'
+                        f'{row["from_pin"]}'
+                        ' -> '
+                        f'{row["to_component"]}.'
+                        f'{row["to_pin"]}'
+                    )
+                    
+            elif token == "@id":
+
+                replacement = nearest_component_obj.ref
+                
+                
+            elif token == "@title":
+
+                group_el = find_element_by_id(
+                    root,
+                    nearest_component_obj.group_id,
+                )
+
+                if group_el is not None:
+
+                    replacement = child_title(
+                        group_el
+                    )
+                    
+                    inkex.utils.debug(
+                        f'component={nearest_component_obj.ref} '
+                        f'title="{replacement}"'
+                    )
+                
+                
+            elif token == "@label":
+
+                group_el = find_element_by_id(
+                    root,
+                    nearest_component_obj.group_id,
+                )
+
+                if group_el is not None:
+
+                    replacement = (
+                        inkscape_label(group_el)
+                        or ""
+                    )
+
+                    inkex.utils.debug(
+                        f'component={nearest_component_obj.ref} '
+                        f'label="{replacement}"'
+                    )
+                
+                
+
+            inkex.utils.debug(
+                f"token={token} "
+                f'nearest_wire="{nearest_wire_obj.element_id if nearest_wire_obj else None}" '
+                f'nearest_component="{nearest_component_obj.ref if nearest_component_obj else None}" '
+                f"replacement={replacement!r}"
+            )
+
+            if not replacement:
+                continue
+
+            # replace text
+            for child in list(el):
+
+                if local_name(child.tag) == "tspan":
+
+                    child.text = replacement
+                    
+                    inkex.utils.debug(
+                        f'tspan updated to "{child.text}"'
+                    )
+
+                    break
+
+            inkex.utils.debug(
+                f"Updated {token} -> {replacement}"
+            )
+ 
+        
+    def copy_labels_to_ids(
+        self,
+        root,
+        parent,
+        selected_layers=None,
+    ):
+
+        LABEL_ATTR = (
+            "{http://www.inkscape.org/namespaces/inkscape}label"
+        )
+
+        GROUPMODE_ATTR = (
+            "{http://www.inkscape.org/namespaces/inkscape}groupmode"
+        )
+
+        count = 0
+
+        for el in root.iter():
+
+            # Layer filter
+            if (
+                selected_layers
+                and not element_in_selected_layers(
+                    el,
+                    parent,
+                    selected_layers,
+                )
+            ):
+                continue
+
+            # Ignore text objects
+            if local_name(el.tag) in {
+                "text",
+                "tspan",
+            }:
+                continue
+
+            label = el.get(LABEL_ATTR)
+
+            if not label:
+                continue
+
+            label = label.strip()
+
+            if not label:
+                continue
+
+            # -------------------------------------------------
+            # Find nearest labelled NON-LAYER parent
+            # -------------------------------------------------
+
+            parent_id_prefix = ""
+
+            p = parent.get(el)
+
+            while p is not None:
+
+                # Skip layers completely
+                if (
+                    local_name(p.tag) == "g"
+                    and p.get(GROUPMODE_ATTR) == "layer"
+                ):
+                    p = parent.get(p)
+                    continue
+
+                if local_name(p.tag) != "g":
+                    p = parent.get(p)
+                    continue
+
+                parent_name = (
+                    p.get(LABEL_ATTR)
+                    or p.get("id")
+                )
+
+                if parent_name:
+
+                    parent_name = parent_name.strip()
+
+                    if parent_name:
+
+                        parent_id_prefix = parent_name
+                        break
+
+                p = parent.get(p)
+
+            # -------------------------------------------------
+            # Build hierarchical ID
+            # -------------------------------------------------
+
+            if parent_id_prefix:
+
+                # Don't generate R1.R1
+                if label == parent_id_prefix:
+
+                    new_id = label
+
+                else:
+
+                    new_id = f"{parent_id_prefix}.{label}"
+
+            else:
+
+                new_id = label
+
+            # -------------------------------------------------
+            # Don't rename if it's already correct
+            # -------------------------------------------------
+
+            old_id = el.get("id")
+
+            if old_id == new_id:
+                continue
+
+            if "." not in new_id and label.lower().startswith("pin"):
+
+                inkex.utils.debug(
+                    f"PIN WITHOUT PARENT: "
+                    f"label={label} "
+                    f"old_id={old_id}"
+                )
+
+            inkex.utils.debug(
+                f'RENAME old="{old_id}" new="{new_id}"'
+            )
+            try:
+
+                el.set("id", new_id)
+                count += 1
+
+            except ValueError:
+
+                label = el.get(LABEL_ATTR) or ""
+
+                if label:
+
+                    new_label = f"{label}_{old_id}"
+
+                    el.set(LABEL_ATTR, new_label)
+
+                    inkex.utils.debug(
+                        f'Duplicate ref "{new_id}" '
+                        f'changed label to "{new_label}"'
+                    )
+
+                continue
+
+        return count
+
+    
+        
+    def find_text_by_label(self, label):
+
+        label_attr = (
+            "{http://www.inkscape.org/namespaces/inkscape}label"
+        )
+
+        for el in self.svg.iter():
+
+            if isinstance(el, inkex.TextElement):
+
+                if el.get(label_attr) == label:
+                    return el
+
+        return None
+
+
+    def update_or_create_text_block(
+        self,
+        parent,
+        x,
+        y,
+        text,
+        label,
+    ):
+
+        txt = self.find_text_by_label(label)
+
+        if txt is None:
+
+            txt = inkex.TextElement()
+            txt.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
+            txt.set(
+                "{http://www.inkscape.org/namespaces/inkscape}label",
+                label,
+            )
+
+            txt.set("x", str(x))
+            txt.set("y", str(y))
+
+            txt.style = {
+                "font-size": "10px",
+                "font-family": "monospace",
+            }
+
+            parent.add(txt)
+
+        else:
+
+            x = float(txt.get("x", x))
+            y = float(txt.get("y", y))
+
+            for child in list(txt):
+                txt.remove(child)
+
+        for i, line in enumerate(text.splitlines()):
+
+            span = inkex.Tspan()
+            span.set(
+                "{http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd}role",
+                "line"
+            )
+
+            span.set("x", str(x))
+            span.set("y", str(y + i * 12))
+
+            span.text = line
+
+            txt.add(span)
+
+        return txt
+        
+
 
     def add_text_block(self, parent, x, y, text, title):
 
@@ -1268,6 +1919,10 @@ class SvgToSpice(inkex.EffectExtension):
 
         for i, line in enumerate(text.splitlines()):
             span = inkex.Tspan()
+            span.set(
+                "{http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd}role",
+                "line"
+            )
             span.set("x", str(x))
             span.set("y", str(y + 35 + i * 12))
             span.text = line
@@ -1285,6 +1940,24 @@ class SvgToSpice(inkex.EffectExtension):
         tree = ET.ElementTree(root)
 
         tmp_svg = Path(tempfile.mkstemp(suffix=".svg")[1])
+        
+        parent = build_parent_map(root)
+
+        layer_set = {
+            s.strip()
+            for s in self.options.layers.split(",")
+            if s.strip()
+        }
+
+        updated = self.copy_labels_to_ids(
+            root,
+            parent,
+            layer_set if layer_set else None,
+        )
+
+        inkex.utils.debug(
+            f"Copied {updated} labels to ids"
+        )
 
         try:
 
@@ -1346,6 +2019,13 @@ class SvgToSpice(inkex.EffectExtension):
                 components=components,
                 tol=self.options.tol,
             )
+            
+            self.update_text_placeholders(
+                wires,
+                wire_rows,
+                components,
+                root,
+            )
 
             svg_dir = self.svg_path()
             svg_name = self.svg.name
@@ -1364,19 +2044,48 @@ class SvgToSpice(inkex.EffectExtension):
             out_path = output_folder / f"{base}.cir"
             wire_out_path = output_folder / f"{base}_wirelist.csv"
 
-            with out_path.open("w", encoding="utf-8") as f:
+            # ---------------------------------------------------------
+            # Write files only if NOT displaying on canvas
+            # ---------------------------------------------------------
 
-                f.write("* SVG extracted SPICE-like netlist\n")
+            if not self.options.show_netlist:
 
-                for line in netlist_lines:
-                    f.write(line + "\n")
+                with out_path.open("w", encoding="utf-8") as f:
 
-                f.write(".end\n")
+                    f.write("* SVG extracted SPICE-like netlist\n")
 
-            write_wirelist_csv(
-                wire_rows,
-                wire_out_path,
-            )
+                    for line in netlist_lines:
+                        f.write(line + "\n")
+
+                    f.write(".end\n")
+
+                inkex.utils.debug(
+                    f"Wrote netlist: {out_path}"
+                )
+
+            else:
+
+                inkex.utils.debug(
+                    "Netlist file skipped (displaying on canvas)"
+                )
+
+
+            if not self.options.show_wirelist:
+
+                write_wirelist_csv(
+                    wire_rows,
+                    wire_out_path,
+                )
+
+                inkex.utils.debug(
+                    f"Wrote wirelist: {wire_out_path}"
+                )
+
+            else:
+
+                inkex.utils.debug(
+                    "Wirelist file skipped (displaying on canvas)"
+                )
 
             # ---------------------------------------------------------
             # Optional canvas output
@@ -1390,51 +2099,42 @@ class SvgToSpice(inkex.EffectExtension):
                 netlist_text += "\n".join(netlist_lines)
                 netlist_text += "\n.end"
 
-                self.add_text_block(
+                self.update_or_create_text_block(
                     layer,
                     self.options.text_x,
                     self.options.text_y,
                     netlist_text,
-                    "SPICE NETLIST",
+                    "netlist_output",
                 )
 
             if self.options.show_wirelist:
 
-                # Remove duplicate header rows
-                wirelist_lines = []
+                wirelist_lines = [
+                    "wire_id,from_component,from_pin,to_component,to_pin,net"
+                ]
 
                 for row in wire_rows:
 
-                    row_text = ",".join(map(str, row))
+                    wirelist_lines.append(
+                        ",".join([
+                            row["wire_id"],
+                            row["from_component"],
+                            row["from_pin"],
+                            row["to_component"],
+                            row["to_pin"],
+                            row["net"],
+                        ])
+                    )
 
-                    if (
-                        row_text.lower()
-                        == "wire_id,from_component,from_pin,to_component,to_pin,net"
-                    ):
-                        continue
+                wirelist_text = "\n".join(wirelist_lines)
 
-                    wirelist_lines.append(row_text)
-
-                wirelist_text = (
-                    "wire_id,from_component,from_pin,to_component,to_pin,net\n"
-                    + "\n".join(wirelist_lines)
-                )
-
-                self.add_text_block(
+                self.update_or_create_text_block(
                     layer,
                     self.options.text_x + 400,
                     self.options.text_y,
                     wirelist_text,
-                    "WIRELIST",
+                    "wirelist_output",
                 )
-
-            inkex.utils.debug(
-                f"Wrote netlist: {out_path}"
-            )
-
-            inkex.utils.debug(
-                f"Wrote wirelist: {wire_out_path}"
-            )
 
             for warning in net_warnings + wire_warnings:
                 inkex.errormsg(
