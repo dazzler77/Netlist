@@ -135,7 +135,7 @@ Example:
 might display:
 
 ```text
-28102
+12345
 ```
 
 ---
@@ -182,7 +182,7 @@ This allows connectors, terminal blocks, busbars and links to pass node names th
 Inside the component SVG:
 
 ```text
-#28102 wire
+#12345 wire
 ```
 
 connecting:
@@ -220,7 +220,7 @@ as electrically joined for node propagation.
 Result:
 
 ```spice
-XBusbar1 28102 28102 BusBar
+XBusbar1 12345 12345 BusBar
 ```
 
 while preserving the internal subcircuit:
@@ -270,9 +270,9 @@ Example:
 ```spice
 * SVG extracted SPICE-like netlist
 
-V1 28102 28117 DC 2V
+V1 12345 54321 DC 2V
 
-XBusbar1 28102 28102 BusBar
+XBusbar1 12345 12345 BusBar
 
 .SUBCKT BusBar pin1 pin2
 R1 pin1 short 0
@@ -290,7 +290,7 @@ Example:
 
 ```csv
 wire_id,from_component,from_pin,to_component,to_pin,net
-wire20,V1,Pin1,BB-105,pin1,28102
+wire20,V1,Pin1,BusB,pin1,28102
 ```
 
 The wirelist reflects propagated node aliases, so displayed `#node` text, CSV output and generated netlist all use the same final node names.
