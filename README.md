@@ -33,6 +33,7 @@ A component is normally an SVG group containing:
 - Component graphics
 - Pin objects
 - Optional title/description
+- Component values are stored in the netlist definition in the description.
 
 Example:
 
