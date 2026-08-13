@@ -17,11 +17,47 @@
 
   <param name="tol" type="float" gui-text="Tolerance">0.5</param>
 
-  <param name="resistance" type="string" gui-text="Default Resistance">1k</param>
-  <param name="inductance" type="string" gui-text="Default Inductance">1m</param>
-  <param name="capacitance" type="string" gui-text="Default Capacitance">1u</param>
-  <param name="diode_model" type="string" gui-text="Diode Model">Ddefault</param>
+<param name="component_source"
+       type="optiongroup"
+       appearance="combo"
+       gui-text="Component Source">
+  <option value="id">ID</option>
+  <option value="label">Label</option>
+  <option value="title">Title</option>
+  <option value="description">Description</option>
+</param>
 
+<param name="component_regex"
+       type="string"
+       gui-text="Component Regex">.*</param>
+
+<param name="wire_source"
+       type="optiongroup"
+       appearance="combo"
+       gui-text="Wire Source">
+  <option value="id">ID</option>
+  <option value="label">Label</option>
+  <option value="title">Title</option>
+  <option value="description">Description</option>
+</param>
+
+<param name="wire_regex"
+       type="string"
+       gui-text="Wire Regex">^wire</param>
+
+<param name="pin_source"
+       type="optiongroup"
+       appearance="combo"
+       gui-text="Pin Source">
+  <option value="id">ID</option>
+  <option value="label">Label</option>
+  <option value="title">Title</option>
+  <option value="description">Description</option>
+</param>
+
+<param name="pin_regex"
+       type="string"
+       gui-text="Pin Regex">^pin</param>
   <effect>
     <object-type>all</object-type>
     <effects-menu>
