@@ -290,7 +290,7 @@ Example:
 
 ```csv
 wire_id,from_component,from_pin,to_component,to_pin,net
-wire20,V1,Pin1,BusB,pin1,28102
+wire20,V1,Pin1,BusB,pin1,12345
 ```
 
 The wirelist reflects propagated node aliases, so displayed `#node` text, CSV output and generated netlist all use the same final node names.
