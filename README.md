@@ -297,6 +297,157 @@ The wirelist reflects propagated node aliases, so displayed `#node` text, CSV ou
 
 ---
 
+
+# Hierarchy
+
+Components may be nested inside other components to represent assemblies, connectors, terminal blocks, plug-in modules, sub-devices and similar structures.
+
+Example SVG hierarchy:
+
+```text
+device1
+ └─ device2
+     ├─ pin1
+     ├─ pin2
+     ├─ pin3
+     └─ pin4
+```
+
+Component references are built from the full ownership path:
+
+```text
+device1
+device1.device2
+```
+
+Pins belong to the nearest owning component.
+
+In the example above:
+
+```text
+device1.device2.pin1
+device1.device2.pin2
+device1.device2.pin3
+device1.device2.pin4
+```
+
+are valid pin identifiers.
+
+The parent component does not also own:
+
+```text
+device1.pin1
+device1.pin2
+```
+
+for the same physical pins.
+
+This prevents duplicate ownership and ensures connectors, terminal blocks and nested devices participate correctly in netlists and wirelists.
+
+## Connectors
+
+Connectors are treated as normal components and may contain pins and internal wiring.
+
+Example:
+
+```text
+device1
+ └─ connector1
+      ├─ pin1
+      └─ pin2
+```
+
+The connector component reference becomes:
+
+```text
+device1.connector1
+```
+
+and wirelist entries may contain:
+
+```csv
+wire_id,from_component,from_pin,to_component,to_pin,net
+wire1,deviceA,pin1,device1.connector1,pin2,N001
+```
+
+## Ownership Rules
+
+Every pin is assigned to the nearest component group in the SVG hierarchy.
+
+Example:
+
+```text
+device1
+ └─ device2
+     └─ pin2
+```
+
+Ownership is:
+
+```text
+device1.device2.pin2
+```
+
+not:
+
+```text
+device1.pin2
+```
+
+This avoids ambiguous wirelist entries and ensures hierarchical devices behave consistently in node propagation, netlists and wirelists.
+
+## Internal Wires
+
+Internal wires belong to the component that directly contains them.
+
+Example:
+
+```text
+device1
+ └─ device2
+     ├─ pin1
+     ├─ pin2
+     └─ wire1
+```
+
+The wire is considered part of:
+
+```text
+device1.device2
+```
+
+and may be used for internal connectivity, node propagation, busbars, links or connector pass-through behaviour.
+
+## Benefits
+
+The hierarchy model provides:
+
+- Unique component references.
+- Unique pin ownership.
+- Support for nested devices.
+- Support for connectors as devices.
+- Consistent wirelist generation.
+- Consistent node propagation.
+- Prevention of duplicate pin ownership.
+- Prevention of ambiguous wirelist connections.
+- Future support for multi-level hierarchies such as:
+
+```text
+cabinet1
+ └─ device1
+      └─ connector1
+           └─ pin1
+```
+
+which becomes:
+
+```text
+cabinet1.device1.connector1.pin1
+```
+
+---
+
+
 # Tips
 
 - Move wire ends close to pins if connectivity is not detected.
