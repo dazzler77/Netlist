@@ -31,9 +31,11 @@ from svg_helpers import (local_name, child_title, find_element_by_id, inkscape_l
     is_layer, layer_name, element_in_selected_layers, wire_distance, nearest_wire, 
     component_distance, nearest_component,
     dist, point_to_segment_distance, point_key,point_on_segment, segment_intersection ,
-    mat_identity, mat_mul, mat_apply,parse_transform, element_world_matrix,  )
+    mat_identity, mat_mul, mat_apply,parse_transform, element_world_matrix,pin_relative_path,  )
     
 from spice_netlist_clean import make_spice_netlist as make_spice_netlist_external
+from spice_wirelist import make_wirelist
+from netlist_common import build_wire_nets, pin_touching_nets, endpoint_pins
 
 Point = Tuple[float, float]
 Matrix = Tuple[float, float, float, float, float, float]
@@ -246,32 +248,6 @@ def parse_path_segments(d: str) -> List[Tuple[Point, Point]]:
 
     return out
 
-
-# ---------------------------------------------------------------------
-# Union find
-# ---------------------------------------------------------------------
-
-class DSU:
-    def __init__(self) -> None:
-        self.parent: Dict[Tuple[int, int], Tuple[int, int]] = {}
-
-    def add(self, x: Tuple[int, int]) -> None:
-        self.parent.setdefault(x, x)
-
-    def find(self, x: Tuple[int, int]) -> Tuple[int, int]:
-        self.add(x)
-
-        if self.parent[x] != x:
-            self.parent[x] = self.find(self.parent[x])
-
-        return self.parent[x]
-
-    def union(self, a: Tuple[int, int], b: Tuple[int, int]) -> None:
-        ra = self.find(a)
-        rb = self.find(b)
-
-        if ra != rb:
-            self.parent[rb] = ra
 
 
 # ---------------------------------------------------------------------
@@ -575,41 +551,7 @@ def element_pin(
     return None
 
 
-def pin_touches_point(pin: Pin, p: Point, tol: float) -> bool:
-    if pin.shape in {"line", "path"}:
-        return dist(p, pin.a) <= tol or dist(p, pin.b) <= tol or point_on_segment(p, pin.a, pin.b, tol)
 
-    if pin.shape in {"circle", "ellipse"} and pin.center is not None:
-        return dist(p, pin.center) <= pin.radius + tol
-
-    if pin.shape == "rect" and pin.bbox is not None:
-        x1, y1, x2, y2 = pin.bbox
-        return (x1 - tol) <= p[0] <= (x2 + tol) and (y1 - tol) <= p[1] <= (y2 + tol)
-
-    return False
-
-
-def pin_touches_segment(pin: Pin, seg: Segment, tol: float) -> bool:
-    if pin.shape in {"line", "path"}:
-        return (
-            point_on_segment(pin.a, seg.a, seg.b, tol)
-            or point_on_segment(pin.b, seg.a, seg.b, tol)
-            or point_on_segment(seg.a, pin.a, pin.b, tol)
-            or point_on_segment(seg.b, pin.a, pin.b, tol)
-        )
-
-    if pin.shape in {"circle", "ellipse"} and pin.center is not None:
-        return point_to_segment_distance(pin.center, seg.a, seg.b) <= pin.radius + tol
-
-    if pin.shape == "rect" and pin.bbox is not None:
-        x1, y1, x2, y2 = pin.bbox
-        corners = [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
-        if pin_touches_point(pin, seg.a, tol) or pin_touches_point(pin, seg.b, tol):
-            return True
-        edges = list(zip(corners, corners[1:] + corners[:1]))
-        return any(segment_intersection(seg.a, seg.b, a, b, tol) is not None for a, b in edges)
-
-    return False
 
 
 def line_points(
@@ -725,6 +667,17 @@ def collect_svg(
 
     selected_layers = include_layers if include_layers else None
 
+
+    def nearest_component_group(el: ET.Element):
+        cur = parent.get(el)
+
+        while cur is not None:
+            if cur in component_group_set:
+                return cur
+            cur = parent.get(cur)
+
+        return None
+
     def in_selected_scope(el: ET.Element) -> bool:
         if not selected_layers:
             return True
@@ -736,13 +689,13 @@ def collect_svg(
         if value.startswith("#"):
             return ""
 
-        if "." in value:
-            value = value.rsplit(".", 1)[-1]
-
         return value.strip()
 
     def is_default_auto_id(name: str) -> bool:
         return re.match(r"^(path|rect|circle|ellipse|line)\d+$", name or "", flags=re.I) is not None
+        
+        
+        
 
     def netlist_declared_pin_names(netlist: str) -> Set[str]:
         """Infer formal pin names used by a component netlist template."""
@@ -850,6 +803,12 @@ def collect_svg(
     component_group_set = {g for g, *_rest in component_groups}
 
     for order, (group, ctype, netlist, is_subckt, subckt_name) in enumerate(component_groups):
+
+        ref = element_name(group)
+
+
+
+    for order, (group, ctype, netlist, is_subckt, subckt_name) in enumerate(component_groups):
         ref = element_name(group)
         pins: Dict[str, Pin] = {}
         declared_pins = {p.lower(): p for p in netlist_declared_pin_names(netlist)}
@@ -863,33 +822,51 @@ def collect_svg(
             if tag not in {"line", "path", "circle", "ellipse", "rect"}:
                 continue
 
-            pin_name: Optional[str] = None
+            pin_name = None
 
-            if has_netlist:
-                candidates = [
-                    name_from_source(el, "id"),
-                    name_from_source(el, "label"),
-                    name_from_source(el, "title"),
-                    name_from_source(el, "description"),
-                ]
+            candidates = [
+                name_from_source(el, "id"),
+                name_from_source(el, "label"),
+                name_from_source(el, "title"),
+                name_from_source(el, "description"),
+            ]
 
-                for candidate in candidates:
-                    if not candidate:
-                        continue
-                    key = candidate.lower()
-                    if key in declared_pins:
-                        pin_name = declared_pins[key]
-                        break
+            for candidate in candidates:
 
-            else:
-                pin_value = get_match_value(el, pin_source)
-                if pin_re.search(pin_value or ""):
-                    pin_name = name_from_source(el, pin_source)
+                if not candidate:
+                    continue
+
+                key = candidate.lower()
+
+                # Explicitly declared in netlist
+                if key in declared_pins:
+                    pin_name = declared_pins[key]
+                    break
+
+                # Or matches pin regex
+                if pin_re.search(candidate):
+                    pin_name = candidate
+                    break
 
             if not pin_name:
                 continue
 
             if is_default_auto_id(pin_name):
+                continue
+
+            owner_group = nearest_component_group(el)
+
+            cur = el
+            chain = []
+
+            while cur is not None:
+                chain.append(element_name(cur))
+                cur = parent.get(cur)
+
+            if owner_group is not group:
+                inkex.utils.debug(
+                f"SKIP PIN group={ref} pin={element_name(el)}"
+                )
                 continue
 
             pin = element_pin(
@@ -903,20 +880,13 @@ def collect_svg(
                 continue
 
             if pin_name in pins:
-                print(
+                inkex.utils.debug(
                     f"Warning: {ref} has duplicate pin {pin_name}",
                     file=sys.stderr,
                 )
 
             pins[pin_name] = pin
             pin_elements.add(el)
-
-            inkex.utils.debug(
-                f"{ref} pin={pin_name} "
-                f"shape={pin.shape} "
-                f"a={pin.a} "
-                f"b={pin.b}"
-            )
 
         explicit_owner, local_ref = split_explicit_owner(netlist)
         owner = explicit_owner or ("" if is_subckt else ancestor_subckt_name(group))
@@ -978,33 +948,7 @@ def collect_svg(
 
         if not segs:
             continue
-
-        if element_name(el) == "wire1":
-            inkex.utils.debug(
-                f"WIRE1 "
-                f"id={element_name(el)} "
-                f"title={get_title(el)!r} "
-                f"desc={get_description(el)!r} "
-                f"label={inkscape_label(el)!r}"
-            )
-
-        if element_name(el) == "wire1":
-            inkex.utils.debug(
-                f"WIRE1 RAW id={element_name(el)} "
-                f"title={get_title(el)!r} "
-                f"label={inkscape_label(el)!r}"
-            )
-
-
         wire_owner = nearest_component_owner(el)
-
-        inkex.utils.debug(
-            f"WIRE {element_name(el)} "
-            f'owner="{wire_owner}" '
-            f'title="{get_title(el)}" '
-            f"{segs[0].a}->{segs[-1].b}"
-        )
-
         wires.append(
             Wire(
                 element_id=element_name(el),
@@ -1019,411 +963,6 @@ def collect_svg(
     return wires, components
 
 
-# ---------------------------------------------------------------------
-# Net solving
-# ---------------------------------------------------------------------
-
-def all_wire_segments(wires: List[Wire]) -> List[Tuple[str, Segment]]:
-    out: List[Tuple[str, Segment]] = []
-
-    for w in wires:
-        for s in w.segments:
-            out.append((w.element_id, s))
-
-    return out
-
-
-def build_wire_nets(wires, tol):
-    """
-    Build electrical nets from wire geometry.
-
-    Connects:
-        - endpoint to endpoint
-        - endpoint to segment
-        - segment chains within the same path
-
-    Does NOT connect:
-        - plain middle-to-middle visual crossings
-
-    Named net behaviour:
-        - if a wire/path title contains #28102, that wire contributes net name n28102
-        - all connected wires inherit that net name
-        - if multiple named wires are connected, names are combined with underscores
-          e.g. n28102_n28103
-        - if no named wires are present, autogenerated names N001, N002, etc. are used
-    """
-
-    import re
-
-    segments = all_wire_segments(wires)
-    dsu = DSU()
-
-    wire_by_id = {
-        w.element_id: w
-        for w in wires
-    }
-
-    def safe_net_token(text):
-        """
-        Make a node/net token from a wire title.
-
-        The title '#28102' becomes node '28102'.
-
-        No 'n' prefix is added.
-        """
-
-        text = str(text).strip()
-
-        if not text:
-            return None
-
-        # Keep simple SPICE-ish node characters.
-        # Do NOT prefix numeric node names.
-        text = re.sub(
-            r"[^A-Za-z0-9_]+",
-            "_",
-            text,
-        ).strip("_")
-
-        if not text:
-            return None
-
-        return text
-
-
-    def title_text_for_wire(wire):
-        """
-        Return the SVG title for the wire object.
-        """
-
-        for attr_name in (
-            "title",
-            "svg_title",
-            "path_title",
-            "element_title",
-        ):
-
-            value = getattr(
-                wire,
-                attr_name,
-                None,
-            )
-
-            if value:
-                return str(value).strip()
-
-        return ""
-
-
-    def named_nets_for_wire(wire):
-        """
-        Extract node names from wire title.
-
-        Rule:
-            Title must start with '#'.
-
-        Examples:
-            '#28102'      -> {'28102'}
-            '#BAT_POS'    -> {'BAT_POS'}
-            '#IN'         -> {'IN'}
-            'wire #28102' -> set()
-        """
-
-        title = title_text_for_wire(wire)
-
-        if not title:
-            return set()
-
-        title = title.strip()
-
-        # User rule:
-        # the title defines a node only when the hash is at the front.
-        if not title.startswith("#"):
-            return set()
-
-        token = title[1:].strip()
-
-        name = safe_net_token(token)
-
-        if not name:
-            return set()
-
-        return {name}   
-
-    # ---------------------------------------------------------
-    # Only real segment endpoints are allowed to become junction
-    # candidates.
-    # ---------------------------------------------------------
-
-    points = []
-
-    for wire_id, s in segments:
-
-        points.append(s.a)
-        points.append(s.b)
-
-    # Add every endpoint to the union-find.
-
-    for p in points:
-
-        dsu.add(
-            point_key(
-                p,
-                tol,
-            )
-        )
-
-    # ---------------------------------------------------------
-    # For each segment, find all existing endpoints that lie on it.
-    # Then union them along that segment.
-    # ---------------------------------------------------------
-
-    for wire_id, s in segments:
-
-        ax, ay = s.a
-        bx, by = s.b
-
-        dx = bx - ax
-        dy = by - ay
-
-        length2 = dx * dx + dy * dy
-
-        if length2 <= tol * tol:
-            continue
-
-        on_this = []
-
-        for p in points:
-
-            if point_on_segment(
-                p,
-                s.a,
-                s.b,
-                tol,
-            ):
-
-                t = (
-                    ((p[0] - ax) * dx + (p[1] - ay) * dy)
-                    / length2
-                )
-
-                on_this.append(
-                    (
-                        max(
-                            0.0,
-                            min(
-                                1.0,
-                                t,
-                            ),
-                        ),
-                        point_key(
-                            p,
-                            tol,
-                        ),
-                    )
-                )
-
-        on_this.sort(
-            key=lambda item: item[0],
-        )
-
-        # Remove duplicate endpoint keys.
-
-        unique_on_this = []
-
-        last_key = None
-
-        for t, key in on_this:
-
-            if key != last_key:
-
-                unique_on_this.append(
-                    (
-                        t,
-                        key,
-                    )
-                )
-
-                last_key = key
-
-        # If two or more known endpoints lie on this segment,
-        # they are electrically connected by this segment.
-
-        for item1, item2 in zip(
-            unique_on_this,
-            unique_on_this[1:],
-        ):
-
-            k1 = item1[1]
-            k2 = item2[1]
-
-
-            dsu.union(
-                k1,
-                k2,
-            )
-
-    # ---------------------------------------------------------
-    # Collect roots after all unions are complete.
-    # ---------------------------------------------------------
-
-    roots = sorted(
-        {
-            dsu.find(k)
-            for k in dsu.parent
-        }
-    )
-
-    # ---------------------------------------------------------
-    # Collect title-based net names for each connected root.
-    # ---------------------------------------------------------
-
-    root_to_named_nets = {
-        root: set()
-        for root in roots
-    }
-
-    for wire_id, s in segments:
-
-        wire = wire_by_id.get(wire_id)
-
-        if wire is None:
-            continue
-
-        wire_named_nets = named_nets_for_wire(wire)
-
-        if not wire_named_nets:
-            continue
-
-        # Either endpoint belongs to the same electrical root
-        # after the union process.
-        root = dsu.find(
-            point_key(
-                s.a,
-                tol,
-            )
-        )
-
-        root_to_named_nets.setdefault(
-            root,
-            set(),
-        ).update(
-            wire_named_nets
-        )
-
-    # ---------------------------------------------------------
-    # Assign final net names.
-    #
-    # Priority:
-    #   1. explicit title-based names
-    #   2. autogenerated N001, N002, etc.
-    # ---------------------------------------------------------
-
-    root_to_net = {}
-
-    unnamed_index = 1
-
-    for root in roots:
-
-        named_nets = sorted(
-            root_to_named_nets.get(
-                root,
-                set(),
-            ),
-            key=lambda name: name.lower(),
-        )
-
-        if named_nets:
-
-            net_name = named_nets[0]
-
-
-            root_to_net[root] = net_name
-
-        else:
-
-            root_to_net[root] = f"N{unnamed_index:03d}"
-            unnamed_index += 1
-
-    # ---------------------------------------------------------
-    # Build endpoint-key to net-name map.
-    # ---------------------------------------------------------
-
-    key_to_net = {
-        k: root_to_net[
-            dsu.find(k)
-        ]
-        for k in dsu.parent
-    }
-    
-    inkex.utils.debug("===== FINAL WIRE NETS =====")
-
-    for wire in wires:
-
-        wire_nets = set()
-
-        for seg in wire.segments:
-
-            net = net_for_wire_segment(
-                seg,
-                key_to_net,
-                tol,
-            )
-
-            if net:
-                wire_nets.add(net)
-
-        inkex.utils.debug(
-            f'WIRE id="{wire.element_id}" '
-            f'title="{wire.title}" '
-            f'nets={sorted(wire_nets)}'
-        )
-
-    return key_to_net, dsu
-
-def net_for_wire_segment(
-    s: Segment,
-    key_to_net: Dict[Tuple[int, int], str],
-    tol: float,
-) -> Optional[str]:
-    return (
-        key_to_net.get(point_key(s.a, tol))
-        or key_to_net.get(point_key(s.b, tol))
-    )
-
-
-def pin_touching_nets(
-    pin: Pin,
-    wires: List[Wire],
-    key_to_net: Dict[Tuple[int, int], str],
-    tol: float,
-) -> Set[str]:
-    """
-    A pin connects when its geometry touches a wire/path.
-
-    Supported pin geometry:
-        - line/path: wire touches the pin line/path within tolerance
-        - circle/ellipse: wire endpoint inside or segment crosses the shape
-        - rect: wire endpoint inside or segment crosses the box
-    """
-    nets: Set[str] = set()
-
-    for _, seg in all_wire_segments(wires):
-        
-        inkex.utils.debug(
-            f"CHECK {pin.component}.{pin.pin_number} "
-            f"against wire "
-            f"{seg.a}->{seg.b}"
-        )
-
-        if pin_touches_segment(pin, seg, tol):
-            net = net_for_wire_segment(seg, key_to_net, tol)
-
-            if net is not None:
-                nets.add(net)
-
-    return nets
-
 
 
 # ---------------------------------------------------------------------
@@ -1431,293 +970,8 @@ def pin_touching_nets(
 # ---------------------------------------------------------------------
 
 
-def endpoint_pins(
-    point: Point,
-    components: List[Component],
-    tol: float,
-) -> List[Pin]:
-    hits: List[Pin] = []
 
-    for comp in components:
-        if comp.is_subckt:
-            continue
 
-        for pin in comp.pins.values():
-            if pin_touches_point(pin, point, tol):
-                hits.append(pin)
-
-    return hits
-
-
-def make_wirelist(
-    wires: List[Wire],
-    components: List[Component],
-    tol: float,
-) -> Tuple[List[Dict[str, str]], List[str]]:
-    """
-    Point-to-point wire list.
-
-    Rules:
-        - Normal wire:
-              component <-> component
-
-        - Dangling wire:
-              component <-> open circuit
-
-        - Floating component pins:
-              warning only
-              no wirelist row
-
-    """
-
-    import re
-
-    rows: List[Dict[str, str]] = []
-    warnings: List[str] = []
-
-    key_to_net, _ = build_wire_nets(wires, tol)
-
-    connected_pins = set()
-
-    # ---------------------------------------------------------
-    # Determine next available net number
-    # ---------------------------------------------------------
-
-    max_net_num = 0
-
-    for net_name in key_to_net.values():
-
-        if not isinstance(net_name, str):
-            continue
-
-        m = re.fullmatch(r"N(\d+)", net_name)
-
-        if m:
-            max_net_num = max(
-                max_net_num,
-                int(m.group(1)),
-            )
-
-    next_net_num = max_net_num + 1
-
-    fallback_wire_nets = {}
-
-    def get_wire_net(wire):
-
-        nonlocal next_net_num
-
-        net = ""
-
-        if wire.segments:
-
-            net = (
-                net_for_wire_segment(
-                    wire.segments[0],
-                    key_to_net,
-                    tol,
-                )
-                or ""
-            )
-
-        if net:
-            return net
-
-        if wire.element_id not in fallback_wire_nets:
-
-            fallback_wire_nets[wire.element_id] = (
-                f"N{next_net_num:03d}"
-            )
-
-            next_net_num += 1
-
-        return fallback_wire_nets[wire.element_id]
-
-    # ---------------------------------------------------------
-    # Process each wire
-    # ---------------------------------------------------------
-
-    for wire in sorted(
-        wires,
-        key=lambda w: w.element_id,
-    ):
-
-        start_hits = endpoint_pins(
-            wire.start,
-            components,
-            tol,
-        )
-
-        end_hits = endpoint_pins(
-            wire.end,
-            components,
-            tol,
-        )
-
-        # -----------------------------------------------------
-        # Any pin touched by a wire endpoint is considered
-        # connected, even if the wire is dangling.
-        # -----------------------------------------------------
-
-        for p in start_hits:
-
-            connected_pins.add(
-                (
-                    p.component,
-                    str(p.pin_number),
-                )
-            )
-
-        for p in end_hits:
-
-            connected_pins.add(
-                (
-                    p.component,
-                    str(p.pin_number),
-                )
-            )
-
-        if not start_hits and not end_hits:
-            continue
-
-        net = get_wire_net(wire)
-
-        # -----------------------------------------------------
-        # Normal connection:
-        # one component pin at each end
-        # -----------------------------------------------------
-
-        if (
-            len(start_hits) == 1
-            and len(end_hits) == 1
-        ):
-
-            a = start_hits[0]
-            b = end_hits[0]
-
-            if (
-                a.component == b.component
-                and a.pin_number == b.pin_number
-            ):
-
-                warnings.append(
-                    f"wire {wire.element_id}: "
-                    f"both endpoints touch "
-                    f"{a.component}.{a.pin_number}"
-                )
-
-                continue
-
-            rows.append(
-                {
-                    "wire_id": wire.element_id,
-                    "from_component": a.component,
-                    "from_pin": str(a.pin_number),
-                    "to_component": b.component,
-                    "to_pin": str(b.pin_number),
-                    "net": net,
-                }
-            )
-
-            continue
-
-        # -----------------------------------------------------
-        # Dangling wire:
-        # component at start only
-        # -----------------------------------------------------
-
-        if (
-            len(start_hits) == 1
-            and len(end_hits) == 0
-        ):
-
-            a = start_hits[0]
-
-            rows.append(
-                {
-                    "wire_id": wire.element_id,
-                    "from_component": a.component,
-                    "from_pin": str(a.pin_number),
-                    "to_component": "not_connected",
-                    "to_pin": "not_connected",
-                    "net": net,
-                }
-            )
-
-            warnings.append(
-                f"wire {wire.element_id}: "
-                f"dangling wire connected to "
-                f"{a.component}.{a.pin_number}"
-            )
-
-            continue
-
-        # -----------------------------------------------------
-        # Dangling wire:
-        # component at end only
-        # -----------------------------------------------------
-
-        if (
-            len(start_hits) == 0
-            and len(end_hits) == 1
-        ):
-
-            b = end_hits[0]
-
-            rows.append(
-                {
-                    "wire_id": wire.element_id,
-                    "from_component": b.component,
-                    "from_pin": str(b.pin_number),
-                    "to_component": "not_connected",
-                    "to_pin": "not_connected",
-                    "net": net,
-                }
-            )
-
-            warnings.append(
-                f"wire {wire.element_id}: "
-                f"dangling wire connected to "
-                f"{b.component}.{b.pin_number}"
-            )
-
-            continue
-
-        # -----------------------------------------------------
-        # Ambiguous connection
-        # -----------------------------------------------------
-
-        warnings.append(
-            f"wire {wire.element_id}: "
-            f"wirelist requires zero or one component pin "
-            f"at each endpoint. "
-            f"Start: "
-            f"{[p.component + '.' + str(p.pin_number) for p in start_hits] or 'none'}, "
-            f"End: "
-            f"{[p.component + '.' + str(p.pin_number) for p in end_hits] or 'none'}"
-        )
-
-    # ---------------------------------------------------------
-    # Floating pins:
-    # warning only
-    # ---------------------------------------------------------
-
-    for comp in components:
-
-        for pin_num, pin in comp.pins.items():
-
-            key = (
-                comp.ref,
-                str(pin_num),
-            )
-
-            if key in connected_pins:
-                continue
-
-            warnings.append(
-                f"{comp.ref}.{pin_num} is not connected"
-            )
-
-    return rows, warnings
 
 def write_wirelist_csv(
     rows: List[Dict[str, str]],
@@ -1813,11 +1067,6 @@ def main() -> int:
     inkex.errormsg(f"Wires found: {len(wires)}")
     inkex.errormsg(f"Components found: {len(components)}")
     
-    for c in components:
-        inkex.errormsg(
-            f"type={c.component_type} ref={getattr(c,'ref','?')} pins={len(c.pins)}"
-        )
-
     wire_params = {
         "wire_source": args.wire_source,
         "wire_regex": args.wire_regex,
