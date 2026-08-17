@@ -178,7 +178,30 @@ def element_in_selected_layers(
 
     # No layer = include (safe fallback)
     return True
-    
+ 
+def pin_relative_path(
+    pin_el: ET.Element,
+    component_group: ET.Element,
+    parent,
+):
+    parts = []
+
+    cur = pin_el
+
+    while cur is not None and cur is not component_group:
+
+        name = element_name(cur)
+
+        if name:
+            parts.append(name)
+
+        cur = parent.get(cur)
+
+    parts.reverse()
+
+    return ".".join(parts)
+
+ 
 def wire_distance(wire, p):
 
     best = float("inf")
