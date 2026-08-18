@@ -12,7 +12,7 @@ This extension extracts electrical connectivity from an SVG schematic and genera
 Future
 
 - import wire list
-- auto routing
+- auto convert schematic, autorouting
 - import/export circuitjs, ltspice, kicad
 - split components
 - simulation
