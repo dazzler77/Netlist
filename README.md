@@ -6,7 +6,14 @@ This extension extracts electrical connectivity from an SVG schematic and genera
 - Wirelist (`_wirelist.csv`)
 - On-sheet net labels (`#node`, `#wire`, etc.)
 - Hierarchical subcircuits (`.SUBCKT`)
+- Harness creation
 - Connector and busbar node propagation
+Future
+- import wire list
+- auto routing
+- import/export circuitjs, ltspice, kicad
+- split components
+- simulation
 
 ---
 
