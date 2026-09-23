@@ -39,6 +39,7 @@
   <option value="label">Label</option>
   <option value="title">Title</option>
   <option value="description">Description</option>
+  <option value="layer">In Layer</option>
 </param>
 
 <param name="wire_regex"
