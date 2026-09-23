@@ -691,6 +691,36 @@ def collect_svg(
 
         return value.strip()
 
+    def nearest_layer(el: ET.Element) -> Optional[ET.Element]:
+        """Return the nearest ancestor SVG layer containing el."""
+        cur = el
+    
+        while cur is not None:
+            if is_layer(cur):
+                return cur
+            cur = parent.get(cur)
+    
+        return None
+    
+    
+    def wire_match_value(el: ET.Element) -> str:
+        """
+        Return the value used to identify a wire.
+    
+        When wire_source is 'layer', use the nearest containing layer's
+        Inkscape label. Otherwise, use the selected element metadata field.
+        """
+        if wire_source.lower() == "layer":
+            layer = nearest_layer(el)
+    
+            if layer is None:
+                return ""
+    
+            return (inkscape_label(layer) or "").strip()
+    
+        return get_match_value(el, wire_source).strip()
+
+
     def is_default_auto_id(name: str) -> bool:
         return re.match(r"^(path|rect|circle|ellipse|line)\d+$", name or "", flags=re.I) is not None
         
@@ -929,10 +959,11 @@ def collect_svg(
 
         if el in pin_elements:
             continue
-
-        wire_value = get_match_value(el, wire_source)
-        if not wire_re.search(wire_value or ""):
-            continue
+        
+        # Match using the element metadata or its containing layer.
+        wire_value = wire_match_value(el)
+        if not wire_re.search(wire_value):
+        continue
 
         try:
             segs = element_segments(
