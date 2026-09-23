@@ -963,7 +963,7 @@ def collect_svg(
         # Match using the element metadata or its containing layer.
         wire_value = wire_match_value(el)
         if not wire_re.search(wire_value):
-        continue
+            continue
 
         try:
             segs = element_segments(
