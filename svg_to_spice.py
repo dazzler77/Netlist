@@ -678,10 +678,29 @@ def collect_svg(
 
         return None
 
-    def in_selected_scope(el: ET.Element) -> bool:
+
+    def component_in_scope(el):
         if not selected_layers:
             return True
-        return element_in_selected_layers(el, parent, selected_layers)
+        return element_in_selected_layers(
+            el,
+            parent,
+            selected_layers,
+        )
+
+    def wire_in_scope(el):
+        if wire_source.lower() == "layer":
+            return True
+
+        if not selected_layers:
+            return True
+
+        return element_in_selected_layers(
+            el,
+            parent,
+            selected_layers,
+        )
+
 
     def name_from_source(el: ET.Element, source: str) -> str:
         value = get_match_value(el, source).strip()
@@ -712,10 +731,10 @@ def collect_svg(
         """
         if wire_source.lower() == "layer":
             layer = nearest_layer(el)
-    
+
             if layer is None:
                 return ""
-    
+
             return (inkscape_label(layer) or "").strip()
     
         return get_match_value(el, wire_source).strip()
@@ -777,7 +796,10 @@ def collect_svg(
         if is_inside_definition(el, parent):
             continue
 
-        if not in_selected_scope(el):
+        if not component_in_scope(el):
+            continue
+            
+        if not wire_in_scope(el):
             continue
 
         if local_name(el.tag) != "g":
@@ -947,10 +969,16 @@ def collect_svg(
     wires: List[Wire] = []
 
     for el in root.iter():
+        
         if is_inside_definition(el, parent):
             continue
 
-        if not in_selected_scope(el):
+        scope_ok = wire_in_scope(el)
+
+        if not scope_ok:
+            continue
+
+        if not scope_ok:
             continue
 
         tag = local_name(el.tag)
@@ -962,6 +990,7 @@ def collect_svg(
         
         # Match using the element metadata or its containing layer.
         wire_value = wire_match_value(el)
+
         if not wire_re.search(wire_value):
             continue
 
@@ -990,6 +1019,10 @@ def collect_svg(
                 owner=wire_owner,
             )
         )
+
+    inkex.utils.debug(
+        f"Collected {len(wires)} wires"
+    )
 
     return wires, components
 
